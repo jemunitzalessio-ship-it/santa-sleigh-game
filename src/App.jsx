@@ -3,7 +3,7 @@ import React, { useRef, useEffect, useState, useCallback } from 'react';
 const W = 900, H = 600;
 const GRAVITY = 0.12, THRUST = 0.25, MAX_FALL = 4, MAX_RISE = -3;
 const SCROLL_SPEED = 1.2, MOVE_SPEED = 2.5, JUMP = -4.4;
-const MAX_ENERGY = 100, DRAIN = 0.097, FOG_PENALTY = 20;
+const MAX_ENERGY = 100, DRAIN = 0.082, FOG_PENALTY = 20;
 const LIVES = 10, PRESENTS_NEEDED = 3;
 
 const SEGMENTS = [
@@ -179,6 +179,8 @@ function genCity(id) {
 export default function SantaSleighRun() {
   const canvasRef = useRef(null);
   const [tick, setTick] = useState(0);
+  const [paused, setPaused] = useState(false);
+  const pausedRef = useRef(false);
   
   const state = useRef({
     mode: 'TITLE', lives: LIVES, energy: MAX_ENERGY, segIdx: 0,
@@ -195,7 +197,9 @@ export default function SantaSleighRun() {
     wind: null, // { direction: -1 or 1, strength, startTime, duration }
     windWarning: null, // { direction, startTime }
     lastWindTime: 0,
-    doubleJumpUsed: false
+    doubleJumpUsed: false,
+    // Ready countdown (3 second pause at start/respawn)
+    readyTime: 0 // timestamp when ready period started
   });
   
   const initSeg = useCallback(() => {
@@ -205,6 +209,7 @@ export default function SantaSleighRun() {
     s.scrollX = 0;
     s.seg = genFlight(seg.id);
     s.px = 150; s.py = 250; s.vx = 0; s.vy = 0;
+    s.readyTime = performance.now(); // Start ready countdown
   }, []);
   
   const update = useCallback((t) => {
@@ -218,24 +223,28 @@ export default function SantaSleighRun() {
     s.snow.forEach(sn => { sn.y += sn.sp; sn.x += Math.sin(sn.y / 30) * 0.3; });
     
     if (s.mode === 'FLIGHT' && s.seg) {
-      s.scrollX += SCROLL_SPEED;
+      const inReadyPeriod = s.readyTime > 0 && (t - s.readyTime < 3000);
       
-      // Move fog toward player (total speed ~3px/frame = 5 sec to cross screen)
-      s.seg.fogs.forEach(f => {
-        if (!f.cleared) f.x -= 1.8;
-      });
-      
-      if (s.keys[' '] && s.energy > 0) {
-        s.vy -= THRUST;
-        s.energy = Math.max(0, s.energy - DRAIN);
+      if (!inReadyPeriod) {
+        s.scrollX += SCROLL_SPEED;
+        
+        // Move fog toward player (total speed ~3px/frame = 5 sec to cross screen)
+        s.seg.fogs.forEach(f => {
+          if (!f.cleared) f.x -= 1.8;
+        });
+        
+        if (s.keys[' '] && s.energy > 0) {
+          s.vy -= THRUST;
+          s.energy = Math.max(0, s.energy - DRAIN);
+        }
+        s.vy += GRAVITY;
+        if (s.keys['ArrowUp']) s.vy -= 0.1;
+        if (s.keys['ArrowDown']) s.vy += 0.1;
+        if (s.keys['ArrowLeft']) s.px = Math.max(50, s.px - 1.7);
+        if (s.keys['ArrowRight']) s.px = Math.min(W - 150, s.px + 1.7);
+        s.vy = clamp(s.vy, MAX_RISE, MAX_FALL);
+        s.py += s.vy;
       }
-      s.vy += GRAVITY;
-      if (s.keys['ArrowUp']) s.vy -= 0.1;
-      if (s.keys['ArrowDown']) s.vy += 0.1;
-      if (s.keys['ArrowLeft']) s.px = Math.max(50, s.px - 1.7);
-      if (s.keys['ArrowRight']) s.px = Math.min(W - 150, s.px + 1.7);
-      s.vy = clamp(s.vy, MAX_RISE, MAX_FALL);
-      s.py += s.vy;
       
       if (s.keys['r'] || s.keys['R']) {
         // Find closest uncleared fog ahead
@@ -285,7 +294,8 @@ export default function SantaSleighRun() {
         // Respawn at start of current stage with full energy
         s.scrollX = 0; s.px = 150; s.py = 250; s.vy = 0; s.vx = 0;
         s.energy = MAX_ENERGY;
-        s.inv = t + 2000;
+        s.readyTime = t; // Start ready countdown
+        s.inv = t + 5000; // Extend invincibility to cover ready period
         s.msg = 'Hit ground! Restarting stage...'; s.msgT = t + 1500;
         s.zap = { startTime: t, duration: 400, x: s.px, y: H - 100 };
         if (s.lives <= 0) s.mode = 'GAME_OVER';
@@ -316,7 +326,8 @@ export default function SantaSleighRun() {
             // Respawn at start of current stage with full energy
             s.scrollX = 0; s.px = 150; s.py = 250; s.vy = 0; s.vx = 0;
             s.energy = MAX_ENERGY;
-            s.inv = t + 2000;
+            s.readyTime = t; // Start ready countdown
+            s.inv = t + 5000; // Extend invincibility to cover ready period
             s.msg = `Hit ${o.t}! Restarting stage...`; s.msgT = t + 1500;
             // Trigger electric zap effect
             s.zap = { startTime: t, duration: 400, x: s.px, y: s.py };
@@ -343,6 +354,7 @@ export default function SantaSleighRun() {
             s.windWarning = null; // Reset wind warning
             s.lastWindTime = 0; // Reset wind timer
             s.doubleJumpUsed = false; // Reset double jump
+            s.readyTime = t; // Start ready countdown
           }
         }
       }
@@ -355,81 +367,87 @@ export default function SantaSleighRun() {
     }
     
     if (s.mode === 'CITY' && s.cityLvl) {
-      // Wind gust logic - warning 1.5s before, wind every 4 seconds
-      if (!s.wind && !s.windWarning) {
-        if (!s.lastWindTime) s.lastWindTime = t;
-        if (t - s.lastWindTime > 2500) { // 2.5s after last wind = 1.5s before next (4s cycle)
-          // Start warning
-          s.windWarning = {
-            direction: Math.random() < 0.5 ? -1 : 1,
-            startTime: t
-          };
-        }
-      }
+      const inReadyPeriod = s.readyTime > 0 && (t - s.readyTime < 3000);
       
-      // After 1.5s warning, start actual wind
-      if (s.windWarning && t - s.windWarning.startTime > 1500) {
-        s.wind = {
-          direction: s.windWarning.direction,
-          strength: 2.5 + Math.random() * 2,
-          startTime: t,
-          duration: 1500 + Math.random() * 1500
-        };
-        s.msg = s.wind.direction < 0 ? '💨 Wind from right!' : '💨 Wind from left!';
-        s.msgT = t + 1000;
-        s.lastWindTime = t;
-        s.windWarning = null;
-      }
-      
-      // Handle player input first
-      if (s.keys['ArrowLeft']) s.vx = -MOVE_SPEED;
-      else if (s.keys['ArrowRight']) s.vx = MOVE_SPEED;
-      else { s.vx *= 0.8; if (Math.abs(s.vx) < 0.5) s.vx = 0; }
-      
-      // Apply wind force AFTER player input - affects Santa regardless of state
-      if (s.wind) {
-        if (t - s.wind.startTime < s.wind.duration) {
-          // Stronger wind effect that always pushes Santa
-          s.vx += s.wind.direction * s.wind.strength * 0.135;
-          // Also directly push position for more noticeable effect
-          s.px += s.wind.direction * s.wind.strength * 0.27;
-        } else {
-          s.wind = null; // Wind ended
-        }
-      }
-      
-      // Jump and double-jump
-      if (s.keys[' ']) {
-        if (s.ground) {
-          s.vy = JUMP; s.ground = false; s.doubleJumpUsed = false;
-        } else if (!s.doubleJumpUsed) {
-          s.vy = JUMP; s.doubleJumpUsed = true;
-        }
-        s.keys[' '] = false;
-      }
-      
-      s.vy += GRAVITY;
-      s.vy = Math.min(s.vy, MAX_FALL);
-      s.px += s.vx; s.py += s.vy;
-      s.px = clamp(s.px, 0, W - s.pw);
-      
-      s.ground = false;
-      for (const p of s.cityLvl.plats) {
-        if (s.vy > 0) {
-          const feet = s.py + s.ph, prev = feet - s.vy;
-          if (prev <= p.y && feet >= p.y && s.px + s.pw > p.x && s.px < p.x + p.w) {
-            s.py = p.y - s.ph; s.vy = 0; s.ground = true; s.doubleJumpUsed = false;
+      if (!inReadyPeriod) {
+        // Wind gust logic - warning 1.5s before, wind every 6 seconds
+        if (!s.wind && !s.windWarning) {
+          if (!s.lastWindTime) s.lastWindTime = t;
+          if (t - s.lastWindTime > 4500) { // 4.5s after last wind = 1.5s before next (6s cycle)
+            // Start warning
+            s.windWarning = {
+              direction: Math.random() < 0.5 ? -1 : 1,
+              startTime: t
+            };
           }
         }
+        
+        // After 1.5s warning, start actual wind
+        if (s.windWarning && t - s.windWarning.startTime > 1500) {
+          s.wind = {
+            direction: s.windWarning.direction,
+            strength: 2.5 + Math.random() * 2,
+            startTime: t,
+            duration: 1500 + Math.random() * 1500
+          };
+          s.msg = s.wind.direction < 0 ? '💨 Wind from right!' : '💨 Wind from left!';
+          s.msgT = t + 1000;
+          s.lastWindTime = t;
+          s.windWarning = null;
+        }
+        
+        // Handle player input first
+        if (s.keys['ArrowLeft']) s.vx = -MOVE_SPEED;
+        else if (s.keys['ArrowRight']) s.vx = MOVE_SPEED;
+        else { s.vx *= 0.8; if (Math.abs(s.vx) < 0.5) s.vx = 0; }
+        
+        // Apply wind force AFTER player input - affects Santa regardless of state
+        if (s.wind) {
+          if (t - s.wind.startTime < s.wind.duration) {
+            // Stronger wind effect that always pushes Santa
+            s.vx += s.wind.direction * s.wind.strength * 0.135;
+            // Also directly push position for more noticeable effect
+            s.px += s.wind.direction * s.wind.strength * 0.27;
+          } else {
+            s.wind = null; // Wind ended
+          }
+        }
+        
+        // Jump and double-jump
+        if (s.keys[' ']) {
+          if (s.ground) {
+            s.vy = JUMP; s.ground = false; s.doubleJumpUsed = false;
+          } else if (!s.doubleJumpUsed) {
+            s.vy = JUMP; s.doubleJumpUsed = true;
+          }
+          s.keys[' '] = false;
+        }
+        
+        s.vy += GRAVITY;
+        s.vy = Math.min(s.vy, MAX_FALL);
+        s.px += s.vx; s.py += s.vy;
+        s.px = clamp(s.px, 0, W - s.pw);
+        
+        s.ground = false;
+        for (const p of s.cityLvl.plats) {
+          if (s.vy > 0) {
+            const feet = s.py + s.ph, prev = feet - s.vy;
+            if (prev <= p.y && feet >= p.y && s.px + s.pw > p.x && s.px < p.x + p.w) {
+              s.py = p.y - s.ph; s.vy = 0; s.ground = true; s.doubleJumpUsed = false;
+            }
+        }
       }
+      } // End of ready period check
       
       if (s.py > H && t > s.inv) {
-        s.lives--; s.inv = t + 2000;
+        s.lives--; 
         if (s.lives <= 0) s.mode = 'GAME_OVER';
         else {
           // Respawn at sleigh on first building
           s.px = s.cityLvl.sleigh.x + 20; s.py = s.cityLvl.sleigh.y - 30;
           s.vx = 0; s.vy = 0; s.ground = true; s.doubleJumpUsed = false;
+          s.readyTime = t; // Start ready countdown
+          s.inv = t + 5000; // Extend invincibility to cover ready period
           s.msg = 'Fell! Back to sleigh...'; s.msgT = t + 1500;
         }
       }
@@ -896,6 +914,35 @@ export default function SantaSleighRun() {
       ctx.fillStyle = '#fff';
       ctx.font = '12px Arial';
       ctx.fillText(`Progress: ${Math.round(s.scrollX / s.seg.len * 100)}%`, 20, 88);
+      
+      // Get Ready overlay
+      const readyElapsed = t - s.readyTime;
+      if (s.readyTime > 0 && readyElapsed < 3500) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+        ctx.fillRect(0, 0, W, H);
+        
+        ctx.textAlign = 'center';
+        if (readyElapsed < 3000) {
+          // Show "Get Ready!"
+          ctx.fillStyle = '#ffd700';
+          ctx.font = 'bold 48px Georgia';
+          ctx.fillText('Get Ready!', W/2, H/2 - 20);
+          
+          // Countdown
+          const countdown = Math.ceil((3000 - readyElapsed) / 1000);
+          ctx.fillStyle = '#fff';
+          ctx.font = 'bold 72px Georgia';
+          ctx.fillText(countdown.toString(), W/2, H/2 + 60);
+        } else {
+          // Show "Go!"
+          ctx.fillStyle = '#00ff00';
+          ctx.font = 'bold 72px Georgia';
+          ctx.shadowColor = '#00ff00';
+          ctx.shadowBlur = 20;
+          ctx.fillText('GO!', W/2, H/2 + 20);
+          ctx.shadowBlur = 0;
+        }
+      }
     }
     
     if (s.mode === 'CITY' && s.cityLvl) {
@@ -1100,6 +1147,35 @@ export default function SantaSleighRun() {
       ctx.fillText('Presents: ' + '🎁'.repeat(s.delivered) + '⬜'.repeat(PRESENTS_NEEDED - s.delivered), 20, 120);
       ctx.fillStyle = s.canExit ? '#ffd700' : '#fff';
       ctx.fillText(s.canExit ? 'Return to sleigh!' : `Find ${PRESENTS_NEEDED - s.delivered} chimneys`, 20, 140);
+      
+      // Get Ready overlay
+      const readyElapsed = t - s.readyTime;
+      if (s.readyTime > 0 && readyElapsed < 3500) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+        ctx.fillRect(0, 0, W, H);
+        
+        ctx.textAlign = 'center';
+        if (readyElapsed < 3000) {
+          // Show "Get Ready!"
+          ctx.fillStyle = '#ffd700';
+          ctx.font = 'bold 48px Georgia';
+          ctx.fillText('Get Ready!', W/2, H/2 - 20);
+          
+          // Countdown
+          const countdown = Math.ceil((3000 - readyElapsed) / 1000);
+          ctx.fillStyle = '#fff';
+          ctx.font = 'bold 72px Georgia';
+          ctx.fillText(countdown.toString(), W/2, H/2 + 60);
+        } else {
+          // Show "Go!"
+          ctx.fillStyle = '#00ff00';
+          ctx.font = 'bold 72px Georgia';
+          ctx.shadowColor = '#00ff00';
+          ctx.shadowBlur = 20;
+          ctx.fillText('GO!', W/2, H/2 + 20);
+          ctx.shadowBlur = 0;
+        }
+      }
     }
     
     if (s.mode === 'WIN') {
@@ -1774,17 +1850,40 @@ export default function SantaSleighRun() {
     
     let animId;
     const loop = (t) => {
-      update(t);
+      if (!pausedRef.current) {
+        update(t);
+      }
       draw(ctx, t);
+      // Draw pause overlay
+      if (pausedRef.current) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle = '#ffd700';
+        ctx.font = 'bold 48px Georgia';
+        ctx.textAlign = 'center';
+        ctx.fillText('PAUSED', W/2, H/2 - 20);
+        ctx.fillStyle = '#fff';
+        ctx.font = '20px Arial';
+        ctx.fillText('Press P or ESC to resume', W/2, H/2 + 30);
+      }
       animId = requestAnimationFrame(loop);
     };
     animId = requestAnimationFrame(loop);
     
     const onKey = (e, down) => {
-      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'r', 'R', 'Enter'].includes(e.key)) {
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'r', 'R', 'Enter', 'p', 'P', 'Escape'].includes(e.key)) {
         e.preventDefault();
       }
       state.current.keys[e.key] = down;
+      
+      // Pause/Resume with P or Escape
+      if (down && (e.key === 'p' || e.key === 'P' || e.key === 'Escape')) {
+        const s = state.current;
+        if (s.mode === 'FLIGHT' || s.mode === 'CITY') {
+          pausedRef.current = !pausedRef.current;
+          setPaused(pausedRef.current);
+        }
+      }
       
       if (down && e.key === 'Enter') {
         const s = state.current;
@@ -1799,7 +1898,7 @@ export default function SantaSleighRun() {
             mode: 'TITLE', lives: LIVES, energy: MAX_ENERGY, segIdx: 0,
             px: 150, py: 250, vx: 0, vy: 0, ground: false,
             scrollX: 0, seg: null, cityLvl: null, delivered: 0, doneCh: [], canExit: false,
-            inv: 0, msg: '', msgT: 0, beam: null, dissolvingFogs: [], zap: null, wind: null, windWarning: null, lastWindTime: 0, doubleJumpUsed: false
+            inv: 0, msg: '', msgT: 0, beam: null, dissolvingFogs: [], zap: null, wind: null, windWarning: null, lastWindTime: 0, doubleJumpUsed: false, readyTime: 0
           });
         }
       }
@@ -1821,6 +1920,14 @@ export default function SantaSleighRun() {
     };
   }, [update, draw, initSeg]);
   
+  const togglePause = () => {
+    const s = state.current;
+    if (s.mode === 'FLIGHT' || s.mode === 'CITY') {
+      pausedRef.current = !pausedRef.current;
+      setPaused(pausedRef.current);
+    }
+  };
+
   return (
     <div style={{ 
       display: 'flex', 
@@ -1832,15 +1939,86 @@ export default function SantaSleighRun() {
       position: 'fixed',
       top: 0,
       left: 0,
-      background: '#0d1b2a', 
+      background: 'linear-gradient(180deg, #1a0a2e 0%, #16213e 50%, #0f3460 100%)', 
       padding: 20,
       boxSizing: 'border-box',
-      margin: 0
+      margin: 0,
+      fontFamily: '"Press Start 2P", "Courier New", monospace'
     }}>
-      <canvas ref={canvasRef} width={W} height={H} style={{ border: '4px solid #ffd700', borderRadius: 8, boxShadow: '0 0 30px rgba(255,215,0,0.3)' }} tabIndex={0} />
-      <div style={{ color: '#fff', marginTop: 15, textAlign: 'center', fontSize: 14, opacity: 0.8 }}>
-        <p style={{ margin: '5px 0' }}><b>Flight:</b> ↑↓←→ Steer | SPACE Thrust | R Clear Fog</p>
-        <p style={{ margin: '5px 0' }}><b>City:</b> ←→ Move | SPACE Jump/Double-Jump | Deliver to chimneys!</p>
+      {/* Retro Christmas decorations */}
+      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 8, background: 'repeating-linear-gradient(90deg, #ff0000 0px, #ff0000 20px, #00ff00 20px, #00ff00 40px)' }} />
+      <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 8, background: 'repeating-linear-gradient(90deg, #00ff00 0px, #00ff00 20px, #ff0000 20px, #ff0000 40px)' }} />
+      
+      {/* Neon title */}
+      <h1 style={{ 
+        color: '#ff6b6b', 
+        textShadow: '0 0 10px #ff0000, 0 0 20px #ff0000, 0 0 30px #ff0000, 0 0 40px #ff0000',
+        fontSize: 28,
+        marginBottom: 10,
+        letterSpacing: 4,
+        fontFamily: '"Press Start 2P", "Courier New", monospace'
+      }}>
+        🎅 SANTA SLEIGH RUN 🎄
+      </h1>
+      
+      {/* Pause button */}
+      <button 
+        onClick={togglePause}
+        style={{
+          position: 'absolute',
+          top: 20,
+          right: 20,
+          padding: '10px 20px',
+          fontSize: 14,
+          fontFamily: '"Press Start 2P", "Courier New", monospace',
+          background: paused ? 'linear-gradient(180deg, #00ff00, #008800)' : 'linear-gradient(180deg, #ff6b6b, #cc0000)',
+          color: '#fff',
+          border: '3px solid #ffd700',
+          borderRadius: 5,
+          cursor: 'pointer',
+          boxShadow: paused ? '0 0 15px #00ff00' : '0 0 15px #ff0000',
+          textShadow: '2px 2px 0 #000'
+        }}
+      >
+        {paused ? '▶ RESUME' : '⏸ PAUSE'}
+      </button>
+      
+      <canvas ref={canvasRef} width={W} height={H} style={{ 
+        border: '4px solid #ffd700', 
+        borderRadius: 8, 
+        boxShadow: '0 0 30px rgba(255,215,0,0.5), 0 0 60px rgba(255,0,0,0.3), inset 0 0 30px rgba(0,0,0,0.5)' 
+      }} tabIndex={0} />
+      
+      {/* Retro control instructions */}
+      <div style={{ 
+        color: '#00ff00', 
+        marginTop: 20, 
+        textAlign: 'center', 
+        fontSize: 10,
+        textShadow: '0 0 10px #00ff00',
+        letterSpacing: 1
+      }}>
+        <p style={{ margin: '8px 0', color: '#ff6b6b', textShadow: '0 0 10px #ff0000' }}>
+          ✈️ FLIGHT: ↑↓←→ Steer | SPACE Thrust | R Clear Fog
+        </p>
+        <p style={{ margin: '8px 0', color: '#00ffff', textShadow: '0 0 10px #00ffff' }}>
+          🏙️ CITY: ←→ Move | SPACE Jump/Double-Jump | Deliver to chimneys!
+        </p>
+        <p style={{ margin: '8px 0', color: '#ffd700', textShadow: '0 0 10px #ffd700' }}>
+          ⏸️ Press P or ESC to Pause
+        </p>
+      </div>
+      
+      {/* Retro decorative text */}
+      <div style={{
+        position: 'absolute',
+        bottom: 20,
+        color: '#ff00ff',
+        fontSize: 8,
+        textShadow: '0 0 5px #ff00ff',
+        letterSpacing: 2
+      }}>
+        ★ MERRY CHRISTMAS ★ HAPPY HOLIDAYS ★ 
       </div>
     </div>
   );
