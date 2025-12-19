@@ -289,7 +289,8 @@ export default function SantaSleighRun() {
         }
       });
       
-      if (s.py + s.ph > H - 100 && t > s.inv) {
+      // Ground collision - snow level is at H - 100
+      if (s.py + s.ph > H - 100 && t > s.inv && !inReadyPeriod) {
         s.lives--; 
         // Respawn at start of current stage with full energy
         s.scrollX = 0; s.px = 150; s.py = 250; s.vy = 0; s.vx = 0;
@@ -300,9 +301,12 @@ export default function SantaSleighRun() {
         s.zap = { startTime: t, duration: 400, x: s.px, y: H - 100 };
         if (s.lives <= 0) s.mode = 'GAME_OVER';
       }
+      // Keep Santa above ground
+      if (s.py + s.ph > H - 100) { s.py = H - 100 - s.ph; s.vy = 0; }
       if (s.py < 20) { s.py = 20; s.vy = 0; }
       
-      if (t > s.inv) {
+      // Obstacle collisions - immune during ready period
+      if (t > s.inv && !inReadyPeriod) {
         for (const o of s.seg.obs) {
           let ox = o.x - s.scrollX;
           
@@ -368,12 +372,19 @@ export default function SantaSleighRun() {
     
     if (s.mode === 'CITY' && s.cityLvl) {
       const inReadyPeriod = s.readyTime > 0 && (t - s.readyTime < 3000);
+      const seg = SEGMENTS[s.segIdx];
+      const cityId = seg?.id || 'montreal';
+      
+      // Wind frequency varies by city (subtract 1.5s for warning period)
+      // Montreal=6s, NYC=4s, DC=3s, Nashville=2s
+      const windIntervals = { montreal: 4500, nyc: 2500, dc: 1500, nashville: 500 };
+      const windInterval = windIntervals[cityId] || 4500;
       
       if (!inReadyPeriod) {
-        // Wind gust logic - warning 1.5s before, wind every 6 seconds
+        // Wind gust logic - warning 1.5s before
         if (!s.wind && !s.windWarning) {
           if (!s.lastWindTime) s.lastWindTime = t;
-          if (t - s.lastWindTime > 4500) { // 4.5s after last wind = 1.5s before next (6s cycle)
+          if (t - s.lastWindTime > windInterval) {
             // Start warning
             s.windWarning = {
               direction: Math.random() < 0.5 ? -1 : 1,
@@ -926,13 +937,23 @@ export default function SantaSleighRun() {
           // Show "Get Ready!"
           ctx.fillStyle = '#ffd700';
           ctx.font = 'bold 48px Georgia';
-          ctx.fillText('Get Ready!', W/2, H/2 - 20);
+          ctx.fillText('Get Ready!', W/2, H/2 - 40);
           
           // Countdown
           const countdown = Math.ceil((3000 - readyElapsed) / 1000);
           ctx.fillStyle = '#fff';
           ctx.font = 'bold 72px Georgia';
-          ctx.fillText(countdown.toString(), W/2, H/2 + 60);
+          ctx.fillText(countdown.toString(), W/2, H/2 + 40);
+          
+          // Flashing "Press Spacebar to fly!!" message
+          if (Math.floor(t / 300) % 2 === 0) {
+            ctx.fillStyle = '#00ffff';
+            ctx.font = 'bold 24px Arial';
+            ctx.shadowColor = '#00ffff';
+            ctx.shadowBlur = 15;
+            ctx.fillText('Press SPACEBAR to fly!!', W/2, H/2 + 110);
+            ctx.shadowBlur = 0;
+          }
         } else {
           // Show "Go!"
           ctx.fillStyle = '#00ff00';
@@ -1179,48 +1200,267 @@ export default function SantaSleighRun() {
     }
     
     if (s.mode === 'WIN') {
-      ctx.fillStyle = '#1a472a';
+      // Retro 80s gradient background
+      const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
+      bgGrad.addColorStop(0, '#1a0a2e');
+      bgGrad.addColorStop(0.5, '#16213e');
+      bgGrad.addColorStop(1, '#0f3460');
+      ctx.fillStyle = bgGrad;
       ctx.fillRect(0, 0, W, H);
       
-      // Fireworks
-      for (let i = 0; i < 20; i++) {
-        ctx.fillStyle = `hsl(${(i * 30) % 360}, 80%, 60%)`;
+      // Animated starfield
+      for (let i = 0; i < 50; i++) {
+        const twinkle = Math.sin(t / 200 + i * 1.5) * 0.5 + 0.5;
+        ctx.fillStyle = `rgba(255, 255, 255, ${twinkle})`;
         ctx.beginPath();
-        ctx.arc(100 + (i * 137) % (W - 200), 100 + (i * 89) % (H - 300), 5 + (i % 5), 0, Math.PI * 2);
+        ctx.arc((i * 73) % W, (i * 47) % (H / 2), 1 + (i % 3), 0, Math.PI * 2);
         ctx.fill();
       }
       
-      ctx.fillStyle = '#ffd700';
-      ctx.font = 'bold 52px Georgia';
+      // Animated fireworks/sparkles
+      for (let i = 0; i < 12; i++) {
+        const angle = (t / 500 + i * 0.5) % (Math.PI * 2);
+        const dist = 30 + Math.sin(t / 300 + i) * 20;
+        const cx = 150 + (i % 4) * 200;
+        const cy = 80 + (Math.floor(i / 4)) * 50;
+        const hue = (i * 60 + t / 10) % 360;
+        ctx.fillStyle = `hsl(${hue}, 100%, 60%)`;
+        ctx.beginPath();
+        ctx.arc(cx + Math.cos(angle) * dist, cy + Math.sin(angle) * dist, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      
+      // Neon "YOU WIN!" text with glow
+      ctx.save();
+      ctx.shadowColor = '#ff00ff';
+      ctx.shadowBlur = 30;
+      ctx.fillStyle = '#ff00ff';
+      ctx.font = 'bold 56px Georgia';
       ctx.textAlign = 'center';
-      ctx.fillText('🎄 YOU WIN! 🎄', W/2, 180);
+      ctx.fillText('🎄 YOU WIN! 🎄', W/2, 80);
+      ctx.shadowBlur = 0;
+      ctx.restore();
       
-      ctx.fillStyle = '#fff';
-      ctx.font = '22px Georgia';
-      ctx.fillText('Santa made it home to Nashville!', W/2, 240);
-      ctx.fillText('All presents delivered!', W/2, 280);
-      ctx.font = '18px Arial';
-      ctx.fillText('Lives: ' + '❤️ x' + s.lives, W/2, 340);
+      // Sub-text
+      ctx.fillStyle = '#00ffff';
+      ctx.font = 'bold 18px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText('Santa made it home to Nashville!', W/2, 115);
       
-      // House
-      ctx.fillStyle = '#8b7355';
-      ctx.fillRect(W/2 - 50, 400, 100, 70);
+      // Floor/carpet
+      ctx.fillStyle = '#8B0000';
+      ctx.fillRect(0, H - 80, W, 80);
+      ctx.fillStyle = '#660000';
+      for (let x = 0; x < W; x += 40) {
+        ctx.fillRect(x, H - 80, 20, 80);
+      }
+      
+      // Big decorated Christmas tree
+      const treeX = W / 2 + 100;
+      const treeY = H - 80;
+      
+      // Tree trunk
       ctx.fillStyle = '#5c3317';
-      ctx.beginPath();
-      ctx.moveTo(W/2 - 60, 400);
-      ctx.lineTo(W/2, 350);
-      ctx.lineTo(W/2 + 60, 400);
-      ctx.fill();
-      ctx.fillStyle = '#cc0000';
-      ctx.fillRect(W/2 - 10, 440, 20, 30);
-      ctx.fillStyle = '#ffeaa7';
-      ctx.fillRect(W/2 - 40, 420, 20, 20);
-      ctx.fillRect(W/2 + 20, 420, 20, 20);
+      ctx.fillRect(treeX - 20, treeY - 40, 40, 40);
       
-      if (Math.floor(Date.now() / 500) % 2) {
+      // Tree layers (bottom to top)
+      ctx.fillStyle = '#1a472a';
+      ctx.beginPath();
+      ctx.moveTo(treeX, treeY - 280);
+      ctx.lineTo(treeX - 120, treeY - 40);
+      ctx.lineTo(treeX + 120, treeY - 40);
+      ctx.closePath();
+      ctx.fill();
+      
+      ctx.fillStyle = '#1f5c32';
+      ctx.beginPath();
+      ctx.moveTo(treeX, treeY - 280);
+      ctx.lineTo(treeX - 90, treeY - 120);
+      ctx.lineTo(treeX + 90, treeY - 120);
+      ctx.closePath();
+      ctx.fill();
+      
+      ctx.fillStyle = '#247339';
+      ctx.beginPath();
+      ctx.moveTo(treeX, treeY - 280);
+      ctx.lineTo(treeX - 60, treeY - 180);
+      ctx.lineTo(treeX + 60, treeY - 180);
+      ctx.closePath();
+      ctx.fill();
+      
+      // Star on top with glow
+      ctx.save();
+      ctx.shadowColor = '#ffd700';
+      ctx.shadowBlur = 20 + Math.sin(t / 200) * 10;
+      ctx.fillStyle = '#ffd700';
+      ctx.beginPath();
+      for (let i = 0; i < 5; i++) {
+        const angle = (i * 4 * Math.PI / 5) - Math.PI / 2;
+        const r = i % 2 === 0 ? 25 : 10;
+        ctx.lineTo(treeX + Math.cos(angle) * r, treeY - 300 + Math.sin(angle) * r);
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+      
+      // Animated ornaments
+      const ornamentColors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff'];
+      for (let i = 0; i < 15; i++) {
+        const ox = treeX - 80 + (i % 5) * 35 + Math.sin(i * 2) * 15;
+        const oy = treeY - 80 - Math.floor(i / 5) * 60;
+        const pulse = Math.sin(t / 300 + i) * 0.3 + 0.7;
+        ctx.save();
+        ctx.shadowColor = ornamentColors[i % ornamentColors.length];
+        ctx.shadowBlur = 10 * pulse;
+        ctx.fillStyle = ornamentColors[i % ornamentColors.length];
+        ctx.beginPath();
+        ctx.arc(ox, oy, 8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+      
+      // String lights on tree
+      ctx.strokeStyle = '#333';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(treeX - 80, treeY - 100);
+      for (let x = treeX - 80; x <= treeX + 80; x += 20) {
+        ctx.lineTo(x, treeY - 100 + Math.sin((x - treeX) / 20) * 10);
+      }
+      ctx.stroke();
+      
+      // Light bulbs
+      for (let i = 0; i < 9; i++) {
+        const lx = treeX - 80 + i * 20;
+        const ly = treeY - 100 + Math.sin((lx - treeX) / 20) * 10;
+        const on = Math.floor(t / 200 + i) % 3 === 0;
+        ctx.fillStyle = on ? ['#ff0000', '#00ff00', '#ffff00'][i % 3] : '#333';
+        ctx.beginPath();
+        ctx.arc(lx, ly + 5, 4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      
+      // Pile of presents under tree
+      const presents = [
+        { x: treeX - 80, y: treeY - 45, w: 40, h: 30, c: '#ff0000', r: '#ffd700' },
+        { x: treeX - 50, y: treeY - 50, w: 35, h: 35, c: '#00aa00', r: '#ff0000' },
+        { x: treeX - 20, y: treeY - 40, w: 45, h: 25, c: '#0066cc', r: '#ffffff' },
+        { x: treeX + 20, y: treeY - 48, w: 38, h: 33, c: '#ffaa00', r: '#ff0000' },
+        { x: treeX + 50, y: treeY - 42, w: 42, h: 28, c: '#cc00cc', r: '#00ffff' },
+        { x: treeX - 65, y: treeY - 75, w: 30, h: 25, c: '#00cccc', r: '#ff00ff' },
+        { x: treeX - 30, y: treeY - 78, w: 35, h: 28, c: '#ff6600', r: '#ffffff' },
+        { x: treeX + 5, y: treeY - 72, w: 32, h: 30, c: '#9900ff', r: '#ffd700' },
+      ];
+      
+      for (const p of presents) {
+        // Present box
+        ctx.fillStyle = p.c;
+        ctx.fillRect(p.x, p.y, p.w, p.h);
+        // Ribbon vertical
+        ctx.fillStyle = p.r;
+        ctx.fillRect(p.x + p.w/2 - 3, p.y, 6, p.h);
+        // Ribbon horizontal
+        ctx.fillRect(p.x, p.y + p.h/2 - 3, p.w, 6);
+        // Bow
+        ctx.beginPath();
+        ctx.arc(p.x + p.w/2 - 8, p.y - 5, 6, 0, Math.PI * 2);
+        ctx.arc(p.x + p.w/2 + 8, p.y - 5, 6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      
+      // Animated Santa walking and placing present
+      const santaX = 100 + (Math.sin(t / 1000) * 80);
+      const santaY = treeY - 80;
+      const walkFrame = Math.floor(t / 200) % 2;
+      
+      // Santa body
+      ctx.fillStyle = '#cc0000';
+      ctx.fillRect(santaX - 15, santaY, 30, 40);
+      
+      // Santa legs (animated)
+      ctx.fillStyle = '#1a1a1a';
+      if (walkFrame === 0) {
+        ctx.fillRect(santaX - 12, santaY + 40, 10, 25);
+        ctx.fillRect(santaX + 2, santaY + 40, 10, 20);
+      } else {
+        ctx.fillRect(santaX - 12, santaY + 40, 10, 20);
+        ctx.fillRect(santaX + 2, santaY + 40, 10, 25);
+      }
+      
+      // Santa boots
+      ctx.fillStyle = '#333';
+      ctx.fillRect(santaX - 14, santaY + 60, 14, 8);
+      ctx.fillRect(santaX, santaY + 60, 14, 8);
+      
+      // Santa belt
+      ctx.fillStyle = '#1a1a1a';
+      ctx.fillRect(santaX - 15, santaY + 25, 30, 6);
+      ctx.fillStyle = '#ffd700';
+      ctx.fillRect(santaX - 5, santaY + 24, 10, 8);
+      
+      // Santa head
+      ctx.fillStyle = '#ffccaa';
+      ctx.beginPath();
+      ctx.arc(santaX, santaY - 10, 18, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // Santa hat
+      ctx.fillStyle = '#cc0000';
+      ctx.beginPath();
+      ctx.moveTo(santaX - 18, santaY - 15);
+      ctx.lineTo(santaX + 5, santaY - 45);
+      ctx.lineTo(santaX + 18, santaY - 15);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(santaX - 20, santaY - 18, 40, 8);
+      ctx.beginPath();
+      ctx.arc(santaX + 5, santaY - 45, 6, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // Santa beard
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.arc(santaX, santaY + 5, 15, 0, Math.PI);
+      ctx.fill();
+      
+      // Santa eyes
+      ctx.fillStyle = '#000';
+      ctx.beginPath();
+      ctx.arc(santaX - 6, santaY - 12, 2, 0, Math.PI * 2);
+      ctx.arc(santaX + 6, santaY - 12, 2, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // Santa holding present (animated)
+      const holdPresent = Math.sin(t / 1000) > 0;
+      if (holdPresent) {
+        ctx.fillStyle = '#cc0000';
+        ctx.fillRect(santaX + 15, santaY + 10, 25, 20);
         ctx.fillStyle = '#ffd700';
-        ctx.font = 'bold 22px Georgia';
-        ctx.fillText('Press ENTER to Play Again!', W/2, 530);
+        ctx.fillRect(santaX + 25, santaY + 10, 5, 20);
+        ctx.fillRect(santaX + 15, santaY + 17, 25, 5);
+      }
+      
+      // Arms
+      ctx.fillStyle = '#cc0000';
+      ctx.fillRect(santaX - 25, santaY + 5, 12, 8);
+      ctx.fillRect(santaX + 13, santaY + 5, 12, 8);
+      
+      // Lives display
+      ctx.fillStyle = '#00ff00';
+      ctx.font = 'bold 20px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText('Lives Remaining: ' + '❤️ x' + s.lives, W/2, H - 30);
+      
+      // Flashing play again
+      if (Math.floor(t / 400) % 2) {
+        ctx.save();
+        ctx.shadowColor = '#ffd700';
+        ctx.shadowBlur = 15;
+        ctx.fillStyle = '#ffd700';
+        ctx.font = 'bold 24px Georgia';
+        ctx.fillText('Press ENTER to Play Again!', W/2, H - 100);
+        ctx.restore();
       }
     }
     
