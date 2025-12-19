@@ -1822,12 +1822,12 @@ export default function SantaSleighRun() {
   }, [update, draw, initSeg]);
   
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', background: '#0d1b2a', padding: 20 }}>
-      <canvas ref={canvasRef} width={W} height={H} style={{ border: '4px solid #ffd700', borderRadius: 8, boxShadow: '0 0 30px rgba(255,215,0,0.3)' }} tabIndex={0} />
-      <div style={{ color: '#fff', marginTop: 15, textAlign: 'center', fontSize: 14, opacity: 0.8 }}>
-        <p style={{ margin: '5px 0' }}><b>Flight:</b> ↑↓←→ Steer | SPACE Thrust | R Clear Fog</p>
-        <p style={{ margin: '5px 0' }}><b>City:</b> ←→ Move | SPACE Jump | Deliver to chimneys!</p>
-      </div>
-    </div>
-  );
-}
+    <div style={{ 
+      display: 'flex', 
+      flexDirection: 'column', 
+      alignItems: 'center', 
+      justifyContent: 'center', 
+      minHeight: '100vh',
+      width: '100vw',
+      position: 'fixed',
+      top: 0,
