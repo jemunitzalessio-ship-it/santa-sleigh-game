@@ -1831,3 +1831,17 @@ export default function SantaSleighRun() {
       width: '100vw',
       position: 'fixed',
       top: 0,
+      left: 0,
+      background: '#0d1b2a', 
+      padding: 20,
+      boxSizing: 'border-box',
+      margin: 0
+    }}>
+      <canvas ref={canvasRef} width={W} height={H} style={{ border: '4px solid #ffd700', borderRadius: 8, boxShadow: '0 0 30px rgba(255,215,0,0.3)' }} tabIndex={0} />
+      <div style={{ color: '#fff', marginTop: 15, textAlign: 'center', fontSize: 14, opacity: 0.8 }}>
+        <p style={{ margin: '5px 0' }}><b>Flight:</b> ↑↓←→ Steer | SPACE Thrust | R Clear Fog</p>
+        <p style={{ margin: '5px 0' }}><b>City:</b> ←→ Move | SPACE Jump/Double-Jump | Deliver to chimneys!</p>
+      </div>
+    </div>
+  );
+}
