@@ -1259,7 +1259,7 @@ export default function SantaSleighRun() {
       ctx.fillStyle = '#00ffff';
       ctx.font = 'bold 18px Arial';
       ctx.textAlign = 'center';
-      ctx.fillText('Santa made it home to Nashville!', W/2, 115);
+      ctx.fillText('Santa made it to Sally & Millie\'s!', W/2, 115);
       
       // Floor/carpet
       ctx.fillStyle = '#8B0000';
