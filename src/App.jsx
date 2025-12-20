@@ -454,12 +454,26 @@ export default function SantaSleighRun() {
         s.lives--; 
         if (s.lives <= 0) s.mode = 'GAME_OVER';
         else {
-          // Respawn at sleigh on first building
-          s.px = s.cityLvl.sleigh.x + 20; s.py = s.cityLvl.sleigh.y - 30;
+          // Find nearest building platform to where Santa fell
+          let nearestPlat = s.cityLvl.plats[0];
+          let nearestDist = Infinity;
+          for (const p of s.cityLvl.plats) {
+            // Calculate distance from Santa's x position to platform center
+            const platCenterX = p.x + p.w / 2;
+            const dist = Math.abs(s.px - platCenterX);
+            if (dist < nearestDist) {
+              nearestDist = dist;
+              nearestPlat = p;
+            }
+          }
+          
+          // Respawn on top of nearest building
+          s.px = nearestPlat.x + nearestPlat.w / 2 - s.pw / 2;
+          s.py = nearestPlat.y - s.ph - 5;
           s.vx = 0; s.vy = 0; s.ground = true; s.doubleJumpUsed = false;
           s.readyTime = t; // Start ready countdown
           s.inv = t + 5000; // Extend invincibility to cover ready period
-          s.msg = 'Fell! Back to sleigh...'; s.msgT = t + 1500;
+          s.msg = 'Fell! Respawning...'; s.msgT = t + 1500;
         }
       }
       
