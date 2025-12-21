@@ -1,10 +1,23 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 
-const W = 900, H = 600;
+// Base dimensions - will scale for mobile
+const BASE_W = 900, BASE_H = 600;
 const GRAVITY = 0.12, THRUST = 0.25, MAX_FALL = 4, MAX_RISE = -3;
 const SCROLL_SPEED = 1.2, MOVE_SPEED = 2.5, JUMP = -4.4;
 const MAX_ENERGY = 100, DRAIN = 0.082, FOG_PENALTY = 20;
 const LIVES = 10, PRESENTS_NEEDED = 3;
+const FOG_SPEED = 1.8; // Base fog approach speed
+
+// Points values
+const POINTS_PER_ENERGY = 100; // Per 1% energy when landing
+const POINTS_PER_LIFE = 1000; // Per life at end
+const POINTS_PER_GOODY = 500; // Per collectible
+
+// Detect mobile
+const isMobile = () => {
+  if (typeof window === 'undefined') return false;
+  return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || window.innerWidth < 768;
+};
 
 const SEGMENTS = [
   { id: 'northpole', name: 'North Pole', type: 'flight' },
@@ -22,13 +35,14 @@ const seed = (s) => { const x = Math.sin(s) * 10000; return x - Math.floor(x); }
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
 const collide = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 
-function genFlight(id, len = 3000) {
+function genFlight(id, len = 3000, W = BASE_W, H = BASE_H) {
   const obs = [], fogs = [];
   let s = id.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
   const final = id === 'final', dense = final ? 2.5 : 1;
   
-  // Ground obstacles (trees, buildings)
-  for (let x = 200; x < len - 400; x += 150 / dense) {
+  // Ground obstacles (trees, buildings) - don't add near landing zone for final
+  const groundObsEnd = final ? len - 600 : len - 400;
+  for (let x = 200; x < groundObsEnd; x += 150 / dense) {
     s++;
     const r = seed(s);
     if (r < 0.6) {
@@ -42,7 +56,8 @@ function genFlight(id, len = 3000) {
   
   // Airborne obstacles (planes, blimps, storm clouds)
   const airborneSpacing = final ? 150 : 400;
-  for (let x = 400; x < len - 600; x += airborneSpacing) {
+  const airborneEnd = final ? len - 500 : len - 600;
+  for (let x = 400; x < airborneEnd; x += airborneSpacing) {
     s++;
     const threshold = final ? 0.7 : 0.3; // More airborne obstacles in final
     if (seed(s) < threshold) {
@@ -75,10 +90,37 @@ function genFlight(id, len = 3000) {
     }
   }
   
-  return { obs, fogs, land: { x: len - 300, y: final ? H - 180 : 200 + seed(s+100) * 150, w: final ? 80 : 120, h: 50 }, len };
+  // For final approach, create tall trees forming a narrow shaft
+  let tallTrees = null;
+  if (final) {
+    const shaftX = len - 350;
+    const shaftWidth = 100; // Narrow gap for Santa to land in
+    const treeHeight = 400; // Very tall trees
+    tallTrees = {
+      leftTree: { x: shaftX - 60, y: H - 100 - treeHeight, w: 60, h: treeHeight },
+      rightTree: { x: shaftX + shaftWidth, y: H - 100 - treeHeight, w: 60, h: treeHeight },
+      shaftX: shaftX,
+      shaftWidth: shaftWidth
+    };
+  }
+  
+  return { 
+    obs, 
+    fogs, 
+    land: { 
+      x: final ? len - 350 : len - 300, 
+      y: final ? H - 180 : 200 + seed(s+100) * 150, 
+      w: final ? 100 : 120, 
+      h: 50 
+    }, 
+    len,
+    tallTrees,
+    final
+  };
 }
 
 function genCity(id) {
+  const W = BASE_W, H = BASE_H; // Use base dimensions
   const styles = {
     montreal: { 
       col: '#4a6572', 
@@ -180,7 +222,29 @@ export default function SantaSleighRun() {
   const canvasRef = useRef(null);
   const [tick, setTick] = useState(0);
   const [paused, setPaused] = useState(false);
+  const [mobile, setMobile] = useState(false);
+  const [gameSize, setGameSize] = useState({ w: BASE_W, h: BASE_H, scale: 1 });
   const pausedRef = useRef(false);
+  
+  // Detect mobile and set game size
+  useEffect(() => {
+    const checkMobile = () => {
+      const isMob = isMobile();
+      setMobile(isMob);
+      if (isMob) {
+        const maxW = Math.min(window.innerWidth - 20, BASE_W);
+        const scale = maxW / BASE_W;
+        setGameSize({ w: maxW, h: BASE_H * scale, scale });
+      } else {
+        setGameSize({ w: BASE_W, h: BASE_H, scale: 1 });
+      }
+    };
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+  
+  const W = BASE_W, H = BASE_H; // Always use base dimensions internally
   
   const state = useRef({
     mode: 'TITLE', lives: LIVES, energy: MAX_ENERGY, segIdx: 0,
@@ -191,15 +255,24 @@ export default function SantaSleighRun() {
     // Beam and fog effects
     beam: null, // { startTime, duration, targetX }
     dissolvingFogs: [], // { x, w, startTime, duration }
+    fogPauseStart: 0, // Track when fog first appeared for gravity pause
     // Electric zap effect
     zap: null, // { startTime, duration, x, y }
     // Wind gust effect for city mode
     wind: null, // { direction: -1 or 1, strength, startTime, duration }
     windWarning: null, // { direction, startTime }
     lastWindTime: 0,
-    doubleJumpUsed: false,
+    lastRespawnTime: 0, // Track respawn time for wind pause
+    airJumpsUsed: 0, // Track air jumps (0-2 allowed for triple jump)
     // Ready countdown (3 second pause at start/respawn)
-    readyTime: 0 // timestamp when ready period started
+    readyTime: 0, // timestamp when ready period started
+    // Points system
+    score: 0,
+    // Goodies/collectibles
+    goodies: [], // { x, y, type: 'candy'|'cookie'|'cocoa', vy }
+    lastGoodyTime: 0,
+    // Final approach state
+    inFinalShaft: false // True when scrolling stops for vertical landing
   });
   
   const initSeg = useCallback(() => {
@@ -222,22 +295,82 @@ export default function SantaSleighRun() {
     while (s.snow.length < 50) s.snow.push({ x: Math.random() * W, y: -10, sz: 2 + Math.random() * 3, sp: 1 + Math.random() * 2 });
     s.snow.forEach(sn => { sn.y += sn.sp; sn.x += Math.sin(sn.y / 30) * 0.3; });
     
+    // Spawn goodies every 5 seconds in both modes
+    if ((s.mode === 'FLIGHT' || s.mode === 'CITY') && t - s.lastGoodyTime > 5000) {
+      const types = ['candy', 'cookie', 'cocoa'];
+      const type = types[Math.floor(Math.random() * types.length)];
+      s.goodies.push({
+        x: 100 + Math.random() * (W - 200),
+        y: -30,
+        type,
+        vy: 0.75 + Math.random() * 0.25  // 50% slower
+      });
+      s.lastGoodyTime = t;
+    }
+    
+    // Update goodies
+    s.goodies = s.goodies.filter(g => g.y < H + 50);
+    s.goodies.forEach(g => { g.y += g.vy; });
+    
+    // Collect goodies
+    s.goodies = s.goodies.filter(g => {
+      if (collide({ x: s.px, y: s.py, w: s.pw, h: s.ph }, { x: g.x - 15, y: g.y - 15, w: 30, h: 30 })) {
+        s.score += POINTS_PER_GOODY;
+        s.msg = `+${POINTS_PER_GOODY} pts!`; s.msgT = t + 1000;
+        return false; // Remove collected goody
+      }
+      return true;
+    });
+    
     if (s.mode === 'FLIGHT' && s.seg) {
       const inReadyPeriod = s.readyTime > 0 && (t - s.readyTime < 3000);
       
+      // Check if we've reached the final shaft area
+      if (final && s.seg.tallTrees) {
+        const shaftScreenX = s.seg.tallTrees.shaftX - s.scrollX;
+        if (shaftScreenX < W / 2 + 100) {
+          s.inFinalShaft = true;
+        }
+      }
+      
       if (!inReadyPeriod) {
-        s.scrollX += SCROLL_SPEED;
+        // Stop scrolling when in final shaft
+        if (!s.inFinalShaft) {
+          s.scrollX += SCROLL_SPEED;
+        }
         
-        // Move fog toward player (total speed ~3px/frame = 5 sec to cross screen)
+        // Move fog toward player
         s.seg.fogs.forEach(f => {
-          if (!f.cleared) f.x -= 1.8;
+          if (!f.cleared) f.x -= FOG_SPEED;
         });
+        
+        // Check if fog is visible on screen (for gravity pause)
+        let fogOnScreen = false;
+        s.seg.fogs.forEach(f => {
+          if (!f.cleared) {
+            const fx = f.x - s.scrollX;
+            if (fx < W && fx + f.w > 0) {
+              fogOnScreen = true;
+            }
+          }
+        });
+        
+        // Start fog pause timer when fog first appears
+        if (fogOnScreen && s.fogPauseStart === 0) {
+          s.fogPauseStart = t;
+        } else if (!fogOnScreen) {
+          s.fogPauseStart = 0; // Reset when no fog on screen
+        }
+        
+        // Check if we're in the 2-second fog pause period
+        const inFogPause = s.fogPauseStart > 0 && (t - s.fogPauseStart < 2000);
+        const gravityMod = inFogPause ? 0.15 : 1; // Greatly reduced gravity during fog pause
         
         if (s.keys[' '] && s.energy > 0) {
           s.vy -= THRUST;
           s.energy = Math.max(0, s.energy - DRAIN);
         }
-        s.vy += GRAVITY;
+        s.vy += GRAVITY * gravityMod;
         if (s.keys['ArrowUp']) s.vy -= 0.1;
         if (s.keys['ArrowDown']) s.vy += 0.1;
         if (s.keys['ArrowLeft']) s.px = Math.max(50, s.px - 1.7);
@@ -332,6 +465,7 @@ export default function SantaSleighRun() {
             s.energy = MAX_ENERGY;
             s.readyTime = t; // Start ready countdown
             s.inv = t + 5000; // Extend invincibility to cover ready period
+            s.inFinalShaft = false; // Reset shaft state
             s.msg = `Hit ${o.t}! Restarting stage...`; s.msgT = t + 1500;
             // Trigger electric zap effect
             s.zap = { startTime: t, duration: 400, x: s.px, y: s.py };
@@ -339,12 +473,56 @@ export default function SantaSleighRun() {
             break;
           }
         }
+        
+        // Collision with tall trees in final approach
+        if (final && s.seg.tallTrees && s.inFinalShaft) {
+          const tt = s.seg.tallTrees;
+          const leftX = tt.leftTree.x - s.scrollX;
+          const rightX = tt.rightTree.x - s.scrollX;
+          
+          // Check collision with left tree
+          if (collide({ x: s.px, y: s.py, w: s.pw, h: s.ph }, 
+                      { x: leftX, y: tt.leftTree.y, w: tt.leftTree.w, h: tt.leftTree.h })) {
+            s.lives--; 
+            s.scrollX = 0; s.px = 150; s.py = 250; s.vy = 0; s.vx = 0;
+            s.energy = MAX_ENERGY;
+            s.readyTime = t;
+            s.inv = t + 5000;
+            s.inFinalShaft = false;
+            s.msg = 'Hit tree! Restarting...'; s.msgT = t + 1500;
+            s.zap = { startTime: t, duration: 400, x: s.px, y: s.py };
+            if (s.lives <= 0) s.mode = 'GAME_OVER';
+          }
+          
+          // Check collision with right tree
+          if (collide({ x: s.px, y: s.py, w: s.pw, h: s.ph }, 
+                      { x: rightX, y: tt.rightTree.y, w: tt.rightTree.w, h: tt.rightTree.h })) {
+            s.lives--; 
+            s.scrollX = 0; s.px = 150; s.py = 250; s.vy = 0; s.vx = 0;
+            s.energy = MAX_ENERGY;
+            s.readyTime = t;
+            s.inv = t + 5000;
+            s.inFinalShaft = false;
+            s.msg = 'Hit tree! Restarting...'; s.msgT = t + 1500;
+            s.zap = { startTime: t, duration: 400, x: s.px, y: s.py };
+            if (s.lives <= 0) s.mode = 'GAME_OVER';
+          }
+        }
       }
       
       const lx = s.seg.land.x - s.scrollX;
       if (collide({ x: s.px, y: s.py, w: s.pw, h: s.ph }, { x: lx, y: s.seg.land.y, w: s.seg.land.w, h: s.seg.land.h })) {
-        if (final) { s.mode = 'WIN'; }
+        if (final) { 
+          // Award points for remaining lives
+          s.score += s.lives * POINTS_PER_LIFE;
+          s.mode = 'WIN'; 
+        }
         else {
+          // Award points for remaining energy when landing in city
+          const energyPoints = Math.round(s.energy) * POINTS_PER_ENERGY;
+          s.score += energyPoints;
+          s.msg = `Landed! +${energyPoints} pts!`; s.msgT = t + 2000;
+          
           s.segIdx++;
           const next = SEGMENTS[s.segIdx];
           if (next?.type === 'city') {
@@ -357,8 +535,11 @@ export default function SantaSleighRun() {
             s.wind = null; // Reset wind
             s.windWarning = null; // Reset wind warning
             s.lastWindTime = 0; // Reset wind timer
-            s.doubleJumpUsed = false; // Reset double jump
+            s.lastRespawnTime = t; // Track for wind pause
+            s.airJumpsUsed = 0; // Reset air jumps
             s.readyTime = t; // Start ready countdown
+            s.goodies = []; // Clear goodies
+            s.lastGoodyTime = t; // Reset goody timer
           }
         }
       }
@@ -380,9 +561,12 @@ export default function SantaSleighRun() {
       const windIntervals = { montreal: 4500, nyc: 2500, dc: 1500, nashville: 500 };
       const windInterval = windIntervals[cityId] || 4500;
       
+      // Check if we're in the 3-second wind pause after respawn
+      const windPauseAfterRespawn = s.lastRespawnTime > 0 && (t - s.lastRespawnTime < 3000);
+      
       if (!inReadyPeriod) {
-        // Wind gust logic - warning 1.5s before
-        if (!s.wind && !s.windWarning) {
+        // Wind gust logic - warning 1.5s before (but not during respawn wind pause)
+        if (!s.wind && !s.windWarning && !windPauseAfterRespawn) {
           if (!s.lastWindTime) s.lastWindTime = t;
           if (t - s.lastWindTime > windInterval) {
             // Start warning
@@ -424,12 +608,12 @@ export default function SantaSleighRun() {
           }
         }
         
-        // Jump and double-jump
+        // Jump and triple-jump (can jump twice while in air)
         if (s.keys[' ']) {
           if (s.ground) {
-            s.vy = JUMP; s.ground = false; s.doubleJumpUsed = false;
-          } else if (!s.doubleJumpUsed) {
-            s.vy = JUMP; s.doubleJumpUsed = true;
+            s.vy = JUMP; s.ground = false; s.airJumpsUsed = 0;
+          } else if (s.airJumpsUsed < 2) {
+            s.vy = JUMP; s.airJumpsUsed++;
           }
           s.keys[' '] = false;
         }
@@ -444,7 +628,7 @@ export default function SantaSleighRun() {
           if (s.vy > 0) {
             const feet = s.py + s.ph, prev = feet - s.vy;
             if (prev <= p.y && feet >= p.y && s.px + s.pw > p.x && s.px < p.x + p.w) {
-              s.py = p.y - s.ph; s.vy = 0; s.ground = true; s.doubleJumpUsed = false;
+              s.py = p.y - s.ph; s.vy = 0; s.ground = true; s.airJumpsUsed = 0;
             }
         }
       }
@@ -470,8 +654,11 @@ export default function SantaSleighRun() {
           // Respawn on top of nearest building
           s.px = nearestPlat.x + nearestPlat.w / 2 - s.pw / 2;
           s.py = nearestPlat.y - s.ph - 5;
-          s.vx = 0; s.vy = 0; s.ground = true; s.doubleJumpUsed = false;
+          s.vx = 0; s.vy = 0; s.ground = true; s.airJumpsUsed = 0;
           s.readyTime = t; // Start ready countdown
+          s.lastRespawnTime = t; // Track for wind pause (3 sec after respawn)
+          s.wind = null; // Cancel any active wind
+          s.windWarning = null; // Cancel any wind warning
           s.inv = t + 5000; // Extend invincibility to cover ready period
           s.msg = 'Fell! Respawning...'; s.msgT = t + 1500;
         }
@@ -491,6 +678,8 @@ export default function SantaSleighRun() {
       
       if (s.canExit && collide({ x: s.px, y: s.py, w: s.pw, h: s.ph }, s.cityLvl.sleigh)) {
         s.segIdx++;
+        s.goodies = []; // Clear goodies
+        s.lastGoodyTime = t; // Reset goody timer
         if (s.segIdx >= SEGMENTS.length) s.mode = 'WIN';
         else { s.mode = 'FLIGHT'; initSeg(); }
       }
@@ -518,24 +707,25 @@ export default function SantaSleighRun() {
       ctx.fillStyle = '#ffd700';
       ctx.font = 'bold 44px Georgia';
       ctx.textAlign = 'center';
-      ctx.fillText('🎅 SANTA SLEIGH RUN 🎄', W/2, 140);
+      ctx.fillText('🎅 SANTA SLEIGH RUN 🎄', W/2, 120);
       
       ctx.fillStyle = '#fff';
-      ctx.font = '18px Georgia';
-      ctx.fillText('Deliver presents: North Pole → Montreal → NYC → DC → Nashville', W/2, 190);
+      ctx.font = '16px Georgia';
+      ctx.fillText('Deliver presents: North Pole → Montreal → NYC → DC → Nashville', W/2, 165);
       
-      ctx.font = '16px Arial';
-      ['↑↓←→ Steer/Move', 'SPACE Thrust/Jump', 'R Clear Fog', 'ENTER Start'].forEach((t, i) => {
-        ctx.fillText(t, W/2, 250 + i * 28);
+      ctx.fillStyle = '#fff';
+      ctx.font = '14px Arial';
+      ['↑↓←→ Steer/Move', 'SPACE Thrust/Jump', 'R Clear Fog', 'ENTER Start'].forEach((txt, i) => {
+        ctx.fillText(txt, W/2, 220 + i * 28);
       });
       
       if (Math.floor(Date.now() / 500) % 2) {
         ctx.fillStyle = '#ffd700';
         ctx.font = 'bold 22px Georgia';
-        ctx.fillText('Press ENTER to Start!', W/2, 420);
+        ctx.fillText('Press ENTER to Start!', W/2, 380);
       }
       
-      drawSleigh(ctx, W/2 - 50, 460, false);
+      drawSleigh(ctx, W/2 - 50, 420, false);
     }
     
     if (s.mode === 'FLIGHT' && s.seg) {
@@ -848,6 +1038,125 @@ export default function SantaSleighRun() {
         ctx.fillText('LAND HERE', lx + s.seg.land.w/2, s.seg.land.y - 35);
       }
       
+      // Draw tall trees for final approach
+      if (final && s.seg.tallTrees) {
+        const tt = s.seg.tallTrees;
+        const leftX = tt.leftTree.x - s.scrollX;
+        const rightX = tt.rightTree.x - s.scrollX;
+        
+        // Left tree
+        if (leftX > -100 && leftX < W + 100) {
+          // Trunk
+          ctx.fillStyle = '#5c3317';
+          ctx.fillRect(leftX + 20, tt.leftTree.y + tt.leftTree.h - 50, 20, 50);
+          // Tree body (triangle)
+          ctx.fillStyle = '#1a472a';
+          ctx.beginPath();
+          ctx.moveTo(leftX + 30, tt.leftTree.y);
+          ctx.lineTo(leftX - 10, tt.leftTree.y + tt.leftTree.h - 50);
+          ctx.lineTo(leftX + 70, tt.leftTree.y + tt.leftTree.h - 50);
+          ctx.closePath();
+          ctx.fill();
+          // Snow on tree
+          ctx.fillStyle = '#fff';
+          ctx.beginPath();
+          ctx.moveTo(leftX + 30, tt.leftTree.y);
+          ctx.lineTo(leftX + 10, tt.leftTree.y + 60);
+          ctx.lineTo(leftX + 50, tt.leftTree.y + 60);
+          ctx.closePath();
+          ctx.fill();
+        }
+        
+        // Right tree
+        if (rightX > -100 && rightX < W + 100) {
+          // Trunk
+          ctx.fillStyle = '#5c3317';
+          ctx.fillRect(rightX + 20, tt.rightTree.y + tt.rightTree.h - 50, 20, 50);
+          // Tree body (triangle)
+          ctx.fillStyle = '#1a472a';
+          ctx.beginPath();
+          ctx.moveTo(rightX + 30, tt.rightTree.y);
+          ctx.lineTo(rightX - 10, tt.rightTree.y + tt.rightTree.h - 50);
+          ctx.lineTo(rightX + 70, tt.rightTree.y + tt.rightTree.h - 50);
+          ctx.closePath();
+          ctx.fill();
+          // Snow on tree
+          ctx.fillStyle = '#fff';
+          ctx.beginPath();
+          ctx.moveTo(rightX + 30, tt.rightTree.y);
+          ctx.lineTo(rightX + 10, tt.rightTree.y + 60);
+          ctx.lineTo(rightX + 50, tt.rightTree.y + 60);
+          ctx.closePath();
+          ctx.fill();
+        }
+        
+        // Draw landing zone text if in shaft
+        if (s.inFinalShaft) {
+          ctx.fillStyle = '#ffd700';
+          ctx.font = 'bold 16px Arial';
+          ctx.textAlign = 'center';
+          ctx.fillText('↓ LAND IN THE GAP! ↓', W/2, 60);
+        }
+      }
+      
+      // Draw goodies (collectibles on parachutes)
+      for (const g of s.goodies) {
+        ctx.save();
+        
+        // Flashing red beacon glow
+        const beaconAlpha = 0.3 + Math.sin(t / 150 + g.x) * 0.3;
+        ctx.fillStyle = `rgba(255, 0, 0, ${beaconAlpha})`;
+        ctx.beginPath();
+        ctx.arc(g.x, g.y - 20, 22 + Math.sin(t / 200) * 5, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Red and green parachute (alternating colors)
+        const isRed = Math.floor(g.x / 50) % 2 === 0;
+        ctx.fillStyle = isRed ? '#cc0000' : '#00aa00';
+        ctx.beginPath();
+        ctx.arc(g.x, g.y - 20, 15, Math.PI, 0);
+        ctx.fill();
+        
+        // Parachute highlight stripe
+        ctx.fillStyle = isRed ? '#00aa00' : '#cc0000';
+        ctx.beginPath();
+        ctx.arc(g.x, g.y - 20, 15, Math.PI + 0.5, Math.PI + 1.5);
+        ctx.lineTo(g.x, g.y - 20);
+        ctx.fill();
+        
+        // Parachute outline
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(g.x, g.y - 20, 15, Math.PI, 0);
+        ctx.stroke();
+        
+        // Parachute strings
+        ctx.strokeStyle = '#444';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(g.x - 12, g.y - 15);
+        ctx.lineTo(g.x - 5, g.y);
+        ctx.moveTo(g.x + 12, g.y - 15);
+        ctx.lineTo(g.x + 5, g.y);
+        ctx.moveTo(g.x, g.y - 20);
+        ctx.lineTo(g.x, g.y);
+        ctx.stroke();
+        
+        // Goody item
+        ctx.font = '20px Arial';
+        ctx.textAlign = 'center';
+        if (g.type === 'candy') {
+          ctx.fillText('🍬', g.x, g.y + 8);
+        } else if (g.type === 'cookie') {
+          ctx.fillText('🍪', g.x, g.y + 8);
+        } else {
+          ctx.fillText('☕', g.x, g.y + 8);
+        }
+        
+        ctx.restore();
+      }
+      
       // Player
       if (t > s.inv || Math.floor(t / 100) % 2) {
         drawSleigh(ctx, s.px, s.py, s.keys[' '] && s.energy > 0);
@@ -913,10 +1222,10 @@ export default function SantaSleighRun() {
       
       // HUD
       ctx.fillStyle = 'rgba(0,0,0,0.6)';
-      ctx.fillRect(10, 10, 240, 85);
+      ctx.fillRect(10, 10, 240, 105);
       ctx.strokeStyle = '#ffd700';
       ctx.lineWidth = 2;
-      ctx.strokeRect(10, 10, 240, 85);
+      ctx.strokeRect(10, 10, 240, 105);
       
       ctx.fillStyle = '#ffd700';
       ctx.font = 'bold 16px Arial';
@@ -939,6 +1248,11 @@ export default function SantaSleighRun() {
       ctx.fillStyle = '#fff';
       ctx.font = '12px Arial';
       ctx.fillText(`Progress: ${Math.round(s.scrollX / s.seg.len * 100)}%`, 20, 88);
+      
+      // Score display
+      ctx.fillStyle = '#ffd700';
+      ctx.font = 'bold 14px Arial';
+      ctx.fillText(`Score: ${s.score.toLocaleString()}`, 20, 108);
       
       // Get Ready overlay
       const readyElapsed = t - s.readyTime;
@@ -1092,6 +1406,64 @@ export default function SantaSleighRun() {
       }
       drawSleigh(ctx, s.cityLvl.sleigh.x, s.cityLvl.sleigh.y - 35, false, 0.6);
       
+      // Draw goodies (collectibles on parachutes)
+      for (const g of s.goodies) {
+        ctx.save();
+        
+        // Flashing red beacon glow
+        const beaconAlpha = 0.3 + Math.sin(t / 150 + g.x) * 0.3;
+        ctx.fillStyle = `rgba(255, 0, 0, ${beaconAlpha})`;
+        ctx.beginPath();
+        ctx.arc(g.x, g.y - 20, 22 + Math.sin(t / 200) * 5, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Red and green parachute (alternating colors)
+        const isRed = Math.floor(g.x / 50) % 2 === 0;
+        ctx.fillStyle = isRed ? '#cc0000' : '#00aa00';
+        ctx.beginPath();
+        ctx.arc(g.x, g.y - 20, 15, Math.PI, 0);
+        ctx.fill();
+        
+        // Parachute highlight stripe
+        ctx.fillStyle = isRed ? '#00aa00' : '#cc0000';
+        ctx.beginPath();
+        ctx.arc(g.x, g.y - 20, 15, Math.PI + 0.5, Math.PI + 1.5);
+        ctx.lineTo(g.x, g.y - 20);
+        ctx.fill();
+        
+        // Parachute outline
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(g.x, g.y - 20, 15, Math.PI, 0);
+        ctx.stroke();
+        
+        // Parachute strings
+        ctx.strokeStyle = '#444';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(g.x - 12, g.y - 15);
+        ctx.lineTo(g.x - 5, g.y);
+        ctx.moveTo(g.x + 12, g.y - 15);
+        ctx.lineTo(g.x + 5, g.y);
+        ctx.moveTo(g.x, g.y - 20);
+        ctx.lineTo(g.x, g.y);
+        ctx.stroke();
+        
+        // Goody item
+        ctx.font = '20px Arial';
+        ctx.textAlign = 'center';
+        if (g.type === 'candy') {
+          ctx.fillText('🍬', g.x, g.y + 8);
+        } else if (g.type === 'cookie') {
+          ctx.fillText('🍪', g.x, g.y + 8);
+        } else {
+          ctx.fillText('☕', g.x, g.y + 8);
+        }
+        
+        ctx.restore();
+      }
+      
       // Player
       if (t > s.inv || Math.floor(t / 100) % 2) {
         drawSanta(ctx, s.px, s.py);
@@ -1171,9 +1543,9 @@ export default function SantaSleighRun() {
       
       // HUD
       ctx.fillStyle = 'rgba(0,0,0,0.6)';
-      ctx.fillRect(10, 80, 200, 70);
+      ctx.fillRect(10, 80, 200, 90);
       ctx.strokeStyle = '#ffd700';
-      ctx.strokeRect(10, 80, 200, 70);
+      ctx.strokeRect(10, 80, 200, 90);
       
       ctx.fillStyle = '#fff';
       ctx.font = '14px Arial';
@@ -1182,6 +1554,11 @@ export default function SantaSleighRun() {
       ctx.fillText('Presents: ' + '🎁'.repeat(s.delivered) + '⬜'.repeat(PRESENTS_NEEDED - s.delivered), 20, 120);
       ctx.fillStyle = s.canExit ? '#ffd700' : '#fff';
       ctx.fillText(s.canExit ? 'Return to sleigh!' : `Find ${PRESENTS_NEEDED - s.delivered} chimneys`, 20, 140);
+      
+      // Score display
+      ctx.fillStyle = '#ffd700';
+      ctx.font = 'bold 14px Arial';
+      ctx.fillText(`Score: ${s.score.toLocaleString()}`, 20, 160);
       
       // Get Ready overlay
       const readyElapsed = t - s.readyTime;
@@ -1259,7 +1636,7 @@ export default function SantaSleighRun() {
       ctx.fillStyle = '#00ffff';
       ctx.font = 'bold 18px Arial';
       ctx.textAlign = 'center';
-      ctx.fillText('Santa made it to Sally & Millie\'s!', W/2, 115);
+      ctx.fillText('Santa made it home to Nashville!', W/2, 115);
       
       // Floor/carpet
       ctx.fillStyle = '#8B0000';
@@ -1460,11 +1837,16 @@ export default function SantaSleighRun() {
       ctx.fillRect(santaX - 25, santaY + 5, 12, 8);
       ctx.fillRect(santaX + 13, santaY + 5, 12, 8);
       
+      // Final Score display
+      ctx.fillStyle = '#ffd700';
+      ctx.font = 'bold 28px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText(`FINAL SCORE: ${s.score.toLocaleString()}`, W/2, H - 60);
+      
       // Lives display
       ctx.fillStyle = '#00ff00';
-      ctx.font = 'bold 20px Arial';
-      ctx.textAlign = 'center';
-      ctx.fillText('Lives Remaining: ' + '❤️ x' + s.lives, W/2, H - 30);
+      ctx.font = '16px Arial';
+      ctx.fillText('Lives Remaining: ' + '❤️ x' + s.lives + ` (+${s.lives * POINTS_PER_LIFE} pts)`, W/2, H - 35);
       
       // Flashing play again
       if (Math.floor(t / 400) % 2) {
@@ -1473,7 +1855,7 @@ export default function SantaSleighRun() {
         ctx.shadowBlur = 15;
         ctx.fillStyle = '#ffd700';
         ctx.font = 'bold 24px Georgia';
-        ctx.fillText('Press ENTER to Play Again!', W/2, H - 100);
+        ctx.fillText('Press ENTER to Play Again!', W/2, H - 5);
         ctx.restore();
       }
     }
@@ -2146,13 +2528,18 @@ export default function SantaSleighRun() {
           s.lives = LIVES;
           s.energy = MAX_ENERGY;
           s.segIdx = 0;
+          s.score = 0;
+          s.goodies = [];
+          s.lastGoodyTime = 0;
+          s.inFinalShaft = false;
           initSeg();
         } else if (s.mode === 'WIN' || s.mode === 'GAME_OVER') {
           Object.assign(s, {
             mode: 'TITLE', lives: LIVES, energy: MAX_ENERGY, segIdx: 0,
             px: 150, py: 250, vx: 0, vy: 0, ground: false,
             scrollX: 0, seg: null, cityLvl: null, delivered: 0, doneCh: [], canExit: false,
-            inv: 0, msg: '', msgT: 0, beam: null, dissolvingFogs: [], zap: null, wind: null, windWarning: null, lastWindTime: 0, doubleJumpUsed: false, readyTime: 0
+            inv: 0, msg: '', msgT: 0, beam: null, dissolvingFogs: [], fogPauseStart: 0, zap: null, wind: null, windWarning: null, lastWindTime: 0, lastRespawnTime: 0, airJumpsUsed: 0, readyTime: 0,
+            score: 0, goodies: [], lastGoodyTime: 0, inFinalShaft: false
           });
         }
       }
@@ -2240,35 +2627,130 @@ export default function SantaSleighRun() {
       <canvas ref={canvasRef} width={W} height={H} style={{ 
         border: '4px solid #ffd700', 
         borderRadius: 8, 
-        boxShadow: '0 0 30px rgba(255,215,0,0.5), 0 0 60px rgba(255,0,0,0.3), inset 0 0 30px rgba(0,0,0,0.5)' 
+        boxShadow: '0 0 30px rgba(255,215,0,0.5), 0 0 60px rgba(255,0,0,0.3), inset 0 0 30px rgba(0,0,0,0.5)',
+        maxWidth: '100%',
+        height: 'auto',
+        transform: mobile ? `scale(${gameSize.scale})` : 'none',
+        transformOrigin: 'top center'
       }} tabIndex={0} />
       
-      {/* Retro control instructions */}
-      <div style={{ 
-        color: '#00ff00', 
-        marginTop: 20, 
-        textAlign: 'center', 
-        fontSize: 10,
-        textShadow: '0 0 10px #00ff00',
-        letterSpacing: 1
-      }}>
-        <p style={{ margin: '8px 0', color: '#ff6b6b', textShadow: '0 0 10px #ff0000' }}>
-          ✈️ FLIGHT: ↑↓←→ Steer | SPACE Thrust | R Clear Fog
-        </p>
-        <p style={{ margin: '8px 0', color: '#00ffff', textShadow: '0 0 10px #00ffff' }}>
-          🏙️ CITY: ←→ Move | SPACE Jump/Double-Jump | Deliver to chimneys!
-        </p>
-        <p style={{ margin: '8px 0', color: '#ffd700', textShadow: '0 0 10px #ffd700' }}>
-          ⏸️ Press P or ESC to Pause
-        </p>
-      </div>
+      {/* Mobile controls */}
+      {mobile && (
+        <div style={{ 
+          display: 'flex', 
+          justifyContent: 'space-between', 
+          width: '100%', 
+          maxWidth: 400,
+          marginTop: 20,
+          padding: '0 10px',
+          boxSizing: 'border-box'
+        }}>
+          {/* D-Pad on left */}
+          <div style={{ 
+            display: 'grid', 
+            gridTemplateColumns: 'repeat(3, 50px)', 
+            gridTemplateRows: 'repeat(3, 50px)',
+            gap: 2 
+          }}>
+            <div />
+            <button 
+              onTouchStart={() => { state.current.keys['ArrowUp'] = true; }}
+              onTouchEnd={() => { state.current.keys['ArrowUp'] = false; }}
+              style={mobileButtonStyle}
+            >▲</button>
+            <div />
+            <button 
+              onTouchStart={() => { state.current.keys['ArrowLeft'] = true; }}
+              onTouchEnd={() => { state.current.keys['ArrowLeft'] = false; }}
+              style={mobileButtonStyle}
+            >◀</button>
+            <div style={{ ...mobileButtonStyle, background: '#333' }} />
+            <button 
+              onTouchStart={() => { state.current.keys['ArrowRight'] = true; }}
+              onTouchEnd={() => { state.current.keys['ArrowRight'] = false; }}
+              style={mobileButtonStyle}
+            >▶</button>
+            <div />
+            <button 
+              onTouchStart={() => { state.current.keys['ArrowDown'] = true; }}
+              onTouchEnd={() => { state.current.keys['ArrowDown'] = false; }}
+              style={mobileButtonStyle}
+            >▼</button>
+            <div />
+          </div>
+          
+          {/* A/B buttons on right */}
+          <div style={{ display: 'flex', gap: 15, alignItems: 'center' }}>
+            <button 
+              onTouchStart={() => { state.current.keys['r'] = true; }}
+              onTouchEnd={() => { state.current.keys['r'] = false; }}
+              style={{ 
+                ...mobileButtonStyle, 
+                width: 60, 
+                height: 60, 
+                borderRadius: '50%',
+                background: 'linear-gradient(180deg, #4a90d9, #2563eb)',
+                fontSize: 14
+              }}
+            >B<br/><span style={{fontSize: 8}}>Nose</span></button>
+            <button 
+              onTouchStart={() => { state.current.keys[' '] = true; }}
+              onTouchEnd={() => { state.current.keys[' '] = false; }}
+              style={{ 
+                ...mobileButtonStyle, 
+                width: 70, 
+                height: 70, 
+                borderRadius: '50%',
+                background: 'linear-gradient(180deg, #ff6b6b, #cc0000)',
+                fontSize: 16
+              }}
+            >A<br/><span style={{fontSize: 8}}>Fly/Jump</span></button>
+          </div>
+        </div>
+      )}
+      
+      {/* Retro control instructions - different for mobile vs desktop */}
+      {!mobile && (
+        <div style={{ 
+          color: '#00ff00', 
+          marginTop: 20, 
+          textAlign: 'center', 
+          fontSize: 10,
+          textShadow: '0 0 10px #00ff00',
+          letterSpacing: 1
+        }}>
+          <p style={{ margin: '8px 0', color: '#ff6b6b', textShadow: '0 0 10px #ff0000' }}>
+            ✈️ FLIGHT: ↑↓←→ Steer | SPACE Thrust | R Clear Fog
+          </p>
+          <p style={{ margin: '8px 0', color: '#00ffff', textShadow: '0 0 10px #00ffff' }}>
+            🏙️ CITY: ←→ Move | SPACE Jump/Triple-Jump | Deliver to chimneys!
+          </p>
+          <p style={{ margin: '8px 0', color: '#ffd700', textShadow: '0 0 10px #ffd700' }}>
+            ⏸️ Press P or ESC to Pause
+          </p>
+        </div>
+      )}
+      
+      {mobile && (
+        <div style={{ 
+          color: '#00ff00', 
+          marginTop: 10, 
+          textAlign: 'center', 
+          fontSize: 8,
+          textShadow: '0 0 10px #00ff00'
+        }}>
+          <p style={{ margin: '4px 0', color: '#fff' }}>
+            D-Pad: Move | A: Fly/Jump | B: Rudolph's Nose
+          </p>
+        </div>
+      )}
       
       {/* Retro decorative text */}
       <div style={{
         position: 'absolute',
-        bottom: 20,
+        bottom: mobile ? 5 : 20,
         color: '#ff00ff',
-        fontSize: 8,
+        fontSize: mobile ? 6 : 8,
         textShadow: '0 0 5px #ff00ff',
         letterSpacing: 2
       }}>
@@ -2277,3 +2759,22 @@ export default function SantaSleighRun() {
     </div>
   );
 }
+
+// Mobile button style
+const mobileButtonStyle = {
+  width: 50,
+  height: 50,
+  borderRadius: 8,
+  border: '2px solid #ffd700',
+  background: 'linear-gradient(180deg, #444, #222)',
+  color: '#fff',
+  fontSize: 20,
+  fontWeight: 'bold',
+  cursor: 'pointer',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  userSelect: 'none',
+  WebkitUserSelect: 'none',
+  touchAction: 'manipulation'
+};
