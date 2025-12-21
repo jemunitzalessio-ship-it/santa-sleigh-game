@@ -2581,22 +2581,23 @@ export default function SantaSleighRun() {
       top: 0,
       left: 0,
       background: 'linear-gradient(180deg, #1a0a2e 0%, #16213e 50%, #0f3460 100%)', 
-      padding: 20,
+      padding: mobile ? 10 : 20,
       boxSizing: 'border-box',
       margin: 0,
-      fontFamily: '"Press Start 2P", "Courier New", monospace'
+      fontFamily: '"Press Start 2P", "Courier New", monospace',
+      overflow: 'auto'
     }}>
       {/* Retro Christmas decorations */}
       <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 8, background: 'repeating-linear-gradient(90deg, #ff0000 0px, #ff0000 20px, #00ff00 20px, #00ff00 40px)' }} />
       <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 8, background: 'repeating-linear-gradient(90deg, #00ff00 0px, #00ff00 20px, #ff0000 20px, #ff0000 40px)' }} />
       
-      {/* Neon title */}
+      {/* Neon title - smaller on mobile */}
       <h1 style={{ 
         color: '#ff6b6b', 
         textShadow: '0 0 10px #ff0000, 0 0 20px #ff0000, 0 0 30px #ff0000, 0 0 40px #ff0000',
-        fontSize: 28,
-        marginBottom: 10,
-        letterSpacing: 4,
+        fontSize: mobile ? 16 : 28,
+        marginBottom: mobile ? 5 : 10,
+        letterSpacing: mobile ? 2 : 4,
         fontFamily: '"Press Start 2P", "Courier New", monospace'
       }}>
         🎅 SANTA SLEIGH RUN 🎄
@@ -2607,10 +2608,10 @@ export default function SantaSleighRun() {
         onClick={togglePause}
         style={{
           position: 'absolute',
-          top: 20,
-          right: 20,
-          padding: '10px 20px',
-          fontSize: 14,
+          top: mobile ? 15 : 20,
+          right: mobile ? 10 : 20,
+          padding: mobile ? '8px 12px' : '10px 20px',
+          fontSize: mobile ? 10 : 14,
           fontFamily: '"Press Start 2P", "Courier New", monospace',
           background: paused ? 'linear-gradient(180deg, #00ff00, #008800)' : 'linear-gradient(180deg, #ff6b6b, #cc0000)',
           color: '#fff',
@@ -2618,7 +2619,8 @@ export default function SantaSleighRun() {
           borderRadius: 5,
           cursor: 'pointer',
           boxShadow: paused ? '0 0 15px #00ff00' : '0 0 15px #ff0000',
-          textShadow: '2px 2px 0 #000'
+          textShadow: '2px 2px 0 #000',
+          zIndex: 10
         }}
       >
         {paused ? '▶ RESUME' : '⏸ PAUSE'}
@@ -2628,11 +2630,79 @@ export default function SantaSleighRun() {
         border: '4px solid #ffd700', 
         borderRadius: 8, 
         boxShadow: '0 0 30px rgba(255,215,0,0.5), 0 0 60px rgba(255,0,0,0.3), inset 0 0 30px rgba(0,0,0,0.5)',
-        maxWidth: '100%',
-        height: 'auto',
-        transform: mobile ? `scale(${gameSize.scale})` : 'none',
-        transformOrigin: 'top center'
+        width: mobile ? 'calc(100vw - 20px)' : W,
+        height: mobile ? `calc((100vw - 20px) * ${H/W})` : H,
+        maxWidth: '100%'
       }} tabIndex={0} />
+      
+      {/* Mobile START button */}
+      {mobile && state.current.mode === 'TITLE' && (
+        <button
+          onClick={() => {
+            const s = state.current;
+            if (s.mode === 'TITLE') {
+              s.mode = 'FLIGHT';
+              s.lives = LIVES;
+              s.energy = MAX_ENERGY;
+              s.segIdx = 0;
+              s.score = 0;
+              s.goodies = [];
+              s.lastGoodyTime = 0;
+              s.inFinalShaft = false;
+              initSeg();
+              setTick(t => t + 1); // Force re-render
+            }
+          }}
+          style={{
+            marginTop: 15,
+            padding: '15px 40px',
+            fontSize: 18,
+            fontFamily: '"Press Start 2P", "Courier New", monospace',
+            background: 'linear-gradient(180deg, #00ff00, #008800)',
+            color: '#fff',
+            border: '4px solid #ffd700',
+            borderRadius: 10,
+            cursor: 'pointer',
+            boxShadow: '0 0 20px #00ff00, 0 0 40px #00ff00',
+            textShadow: '2px 2px 0 #000',
+            animation: 'pulse 1s infinite'
+          }}
+        >
+          🎮 START GAME
+        </button>
+      )}
+      
+      {/* Mobile PLAY AGAIN button */}
+      {mobile && (state.current.mode === 'WIN' || state.current.mode === 'GAME_OVER') && (
+        <button
+          onClick={() => {
+            const s = state.current;
+            Object.assign(s, {
+              mode: 'TITLE', lives: LIVES, energy: MAX_ENERGY, segIdx: 0,
+              px: 150, py: 250, vx: 0, vy: 0, ground: false,
+              scrollX: 0, seg: null, cityLvl: null, delivered: 0, doneCh: [], canExit: false,
+              inv: 0, msg: '', msgT: 0, beam: null, dissolvingFogs: [], fogPauseStart: 0, zap: null, wind: null, windWarning: null, lastWindTime: 0, lastRespawnTime: 0, airJumpsUsed: 0, readyTime: 0,
+              score: 0, goodies: [], lastGoodyTime: 0, inFinalShaft: false
+            });
+            setTick(t => t + 1); // Force re-render
+          }}
+          style={{
+            marginTop: 15,
+            padding: '15px 30px',
+            fontSize: 14,
+            fontFamily: '"Press Start 2P", "Courier New", monospace',
+            background: 'linear-gradient(180deg, #ffd700, #cc9900)',
+            color: '#000',
+            border: '4px solid #fff',
+            borderRadius: 10,
+            cursor: 'pointer',
+            boxShadow: '0 0 20px #ffd700',
+            textShadow: '1px 1px 0 #fff'
+          }}
+        >
+          🔄 PLAY AGAIN
+        </button>
+      )}
       
       {/* Mobile controls */}
       {mobile && (
@@ -2640,16 +2710,16 @@ export default function SantaSleighRun() {
           display: 'flex', 
           justifyContent: 'space-between', 
           width: '100%', 
-          maxWidth: 400,
-          marginTop: 20,
-          padding: '0 10px',
+          maxWidth: '100%',
+          marginTop: 10,
+          padding: '0 5px',
           boxSizing: 'border-box'
         }}>
           {/* D-Pad on left */}
           <div style={{ 
             display: 'grid', 
-            gridTemplateColumns: 'repeat(3, 50px)', 
-            gridTemplateRows: 'repeat(3, 50px)',
+            gridTemplateColumns: 'repeat(3, 44px)', 
+            gridTemplateRows: 'repeat(3, 44px)',
             gap: 2 
           }}>
             <div />
@@ -2686,25 +2756,25 @@ export default function SantaSleighRun() {
               onTouchEnd={() => { state.current.keys['r'] = false; }}
               style={{ 
                 ...mobileButtonStyle, 
-                width: 60, 
-                height: 60, 
+                width: 55, 
+                height: 55, 
                 borderRadius: '50%',
                 background: 'linear-gradient(180deg, #4a90d9, #2563eb)',
-                fontSize: 14
+                fontSize: 12
               }}
-            >B<br/><span style={{fontSize: 8}}>Nose</span></button>
+            >B<br/><span style={{fontSize: 7}}>Nose</span></button>
             <button 
               onTouchStart={() => { state.current.keys[' '] = true; }}
               onTouchEnd={() => { state.current.keys[' '] = false; }}
               style={{ 
                 ...mobileButtonStyle, 
-                width: 70, 
-                height: 70, 
+                width: 65, 
+                height: 65, 
                 borderRadius: '50%',
                 background: 'linear-gradient(180deg, #ff6b6b, #cc0000)',
-                fontSize: 16
+                fontSize: 14
               }}
-            >A<br/><span style={{fontSize: 8}}>Fly/Jump</span></button>
+            >A<br/><span style={{fontSize: 7}}>Fly/Jump</span></button>
           </div>
         </div>
       )}
@@ -2762,13 +2832,13 @@ export default function SantaSleighRun() {
 
 // Mobile button style
 const mobileButtonStyle = {
-  width: 50,
-  height: 50,
+  width: 44,
+  height: 44,
   borderRadius: 8,
   border: '2px solid #ffd700',
   background: 'linear-gradient(180deg, #444, #222)',
   color: '#fff',
-  fontSize: 20,
+  fontSize: 18,
   fontWeight: 'bold',
   cursor: 'pointer',
   display: 'flex',
