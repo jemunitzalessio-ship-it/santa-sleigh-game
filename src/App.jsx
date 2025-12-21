@@ -40,6 +40,12 @@ function genFlight(id, len = 3000, W = BASE_W, H = BASE_H) {
   let s = id.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
   const final = id === 'final', dense = final ? 2.5 : 1;
   
+  // Determine tree type based on segment
+  // Beginning (North Pole) = pine, Middle (to_nyc, to_dc) = oak, End (to_nash, final) = magnolia
+  let treeType = 'pine';
+  if (id === 'to_nyc' || id === 'to_dc') treeType = 'oak';
+  if (id === 'to_nash' || id === 'final') treeType = 'magnolia';
+  
   // Ground obstacles (trees, buildings) - don't add near landing zone for final
   const groundObsEnd = final ? len - 600 : len - 400;
   for (let x = 200; x < groundObsEnd; x += 150 / dense) {
@@ -47,10 +53,12 @@ function genFlight(id, len = 3000, W = BASE_W, H = BASE_H) {
     const r = seed(s);
     if (r < 0.6) {
       const h = 60 + seed(s+1) * 80;
-      obs.push({ t: 'tree', x: x + seed(s+2) * 50, y: H - 100 - h, w: 40, h });
+      // Add variation seed for tree appearance
+      obs.push({ t: 'tree', treeType, x: x + seed(s+2) * 50, y: H - 100 - h, w: 40, h, varSeed: seed(s+3) });
     } else if (r < 0.8 && !final) {
       const h = 100 + seed(s+1) * 150;
-      obs.push({ t: 'bldg', x: x + seed(s+2) * 30, y: H - 100 - h, w: 60 + seed(s+3) * 40, h });
+      // Add variation seed for building appearance
+      obs.push({ t: 'bldg', x: x + seed(s+2) * 30, y: H - 100 - h, w: 60 + seed(s+3) * 40, h, varSeed: seed(s+4) });
     }
   }
   
@@ -252,6 +260,8 @@ export default function SantaSleighRun() {
     scrollX: 0, seg: null,
     cityLvl: null, delivered: 0, doneCh: [], canExit: false,
     keys: {}, inv: 0, msg: '', msgT: 0, snow: [],
+    // Delta time tracking for consistent speed across devices
+    lastFrameTime: 0,
     // Beam and fog effects
     beam: null, // { startTime, duration, targetX }
     dissolvingFogs: [], // { x, w, startTime, duration }
@@ -290,10 +300,17 @@ export default function SantaSleighRun() {
     const seg = SEGMENTS[s.segIdx];
     const final = seg?.isFinal;
     
+    // Calculate delta time for consistent speed across different frame rates
+    // Target is 60fps (16.67ms per frame)
+    // Only apply correction to SPEED UP slow devices (dt > 1), never slow down fast ones
+    const deltaTime = s.lastFrameTime ? t - s.lastFrameTime : 16.67;
+    const dt = Math.max(1, Math.min(deltaTime / 16.67, 3)); // Clamp between 1 and 3
+    s.lastFrameTime = t;
+    
     // Snow
     s.snow = s.snow.filter(sn => sn.y < H + 10);
     while (s.snow.length < 50) s.snow.push({ x: Math.random() * W, y: -10, sz: 2 + Math.random() * 3, sp: 1 + Math.random() * 2 });
-    s.snow.forEach(sn => { sn.y += sn.sp; sn.x += Math.sin(sn.y / 30) * 0.3; });
+    s.snow.forEach(sn => { sn.y += sn.sp * dt; sn.x += Math.sin(sn.y / 30) * 0.3 * dt; });
     
     // Spawn goodies every 5 seconds in both modes
     if ((s.mode === 'FLIGHT' || s.mode === 'CITY') && t - s.lastGoodyTime > 5000) {
@@ -310,7 +327,7 @@ export default function SantaSleighRun() {
     
     // Update goodies
     s.goodies = s.goodies.filter(g => g.y < H + 50);
-    s.goodies.forEach(g => { g.y += g.vy; });
+    s.goodies.forEach(g => { g.y += g.vy * dt; });
     
     // Collect goodies
     s.goodies = s.goodies.filter(g => {
@@ -336,12 +353,12 @@ export default function SantaSleighRun() {
       if (!inReadyPeriod) {
         // Stop scrolling when in final shaft
         if (!s.inFinalShaft) {
-          s.scrollX += SCROLL_SPEED;
+          s.scrollX += SCROLL_SPEED * dt;
         }
         
         // Move fog toward player
         s.seg.fogs.forEach(f => {
-          if (!f.cleared) f.x -= FOG_SPEED;
+          if (!f.cleared) f.x -= FOG_SPEED * dt;
         });
         
         // Check if fog is visible on screen (for gravity pause)
@@ -367,16 +384,16 @@ export default function SantaSleighRun() {
         const gravityMod = inFogPause ? 0.15 : 1; // Greatly reduced gravity during fog pause
         
         if (s.keys[' '] && s.energy > 0) {
-          s.vy -= THRUST;
-          s.energy = Math.max(0, s.energy - DRAIN);
+          s.vy -= THRUST * dt;
+          s.energy = Math.max(0, s.energy - DRAIN * dt);
         }
-        s.vy += GRAVITY * gravityMod;
-        if (s.keys['ArrowUp']) s.vy -= 0.1;
-        if (s.keys['ArrowDown']) s.vy += 0.1;
-        if (s.keys['ArrowLeft']) s.px = Math.max(50, s.px - 1.7);
-        if (s.keys['ArrowRight']) s.px = Math.min(W - 150, s.px + 1.7);
+        s.vy += GRAVITY * gravityMod * dt;
+        if (s.keys['ArrowUp']) s.vy -= 0.1 * dt;
+        if (s.keys['ArrowDown']) s.vy += 0.1 * dt;
+        if (s.keys['ArrowLeft']) s.px = Math.max(50, s.px - 1.7 * dt);
+        if (s.keys['ArrowRight']) s.px = Math.min(W - 150, s.px + 1.7 * dt);
         s.vy = clamp(s.vy, MAX_RISE, MAX_FALL);
-        s.py += s.vy;
+        s.py += s.vy * dt;
       }
       
       if (s.keys['r'] || s.keys['R']) {
@@ -447,7 +464,7 @@ export default function SantaSleighRun() {
           if (o.mv) {
             if (o.t === 'plane') {
               // Planes move right to left with sine wave altitude
-              o.x -= o.speed || 2;
+              o.x -= (o.speed || 2) * dt;
               o.y = o.baseY + Math.sin(t / 800 + o.startX * 0.01) * 40;
               ox = o.x - s.scrollX;
             } else {
@@ -594,15 +611,15 @@ export default function SantaSleighRun() {
         // Handle player input first
         if (s.keys['ArrowLeft']) s.vx = -MOVE_SPEED;
         else if (s.keys['ArrowRight']) s.vx = MOVE_SPEED;
-        else { s.vx *= 0.8; if (Math.abs(s.vx) < 0.5) s.vx = 0; }
+        else { s.vx *= Math.pow(0.8, dt); if (Math.abs(s.vx) < 0.5) s.vx = 0; }
         
         // Apply wind force AFTER player input - affects Santa regardless of state
         if (s.wind) {
           if (t - s.wind.startTime < s.wind.duration) {
             // Stronger wind effect that always pushes Santa
-            s.vx += s.wind.direction * s.wind.strength * 0.135;
+            s.vx += s.wind.direction * s.wind.strength * 0.135 * dt;
             // Also directly push position for more noticeable effect
-            s.px += s.wind.direction * s.wind.strength * 0.27;
+            s.px += s.wind.direction * s.wind.strength * 0.27 * dt;
           } else {
             s.wind = null; // Wind ended
           }
@@ -618,15 +635,15 @@ export default function SantaSleighRun() {
           s.keys[' '] = false;
         }
         
-        s.vy += GRAVITY;
+        s.vy += GRAVITY * dt;
         s.vy = Math.min(s.vy, MAX_FALL);
-        s.px += s.vx; s.py += s.vy;
+        s.px += s.vx * dt; s.py += s.vy * dt;
         s.px = clamp(s.px, 0, W - s.pw);
         
         s.ground = false;
         for (const p of s.cityLvl.plats) {
           if (s.vy > 0) {
-            const feet = s.py + s.ph, prev = feet - s.vy;
+            const feet = s.py + s.ph, prev = feet - s.vy * dt;
             if (prev <= p.y && feet >= p.y && s.px + s.pw > p.x && s.px < p.x + p.w) {
               s.py = p.y - s.ph; s.vy = 0; s.ground = true; s.airJumpsUsed = 0;
             }
@@ -766,7 +783,7 @@ export default function SantaSleighRun() {
         }
         
         if (ox < -100 || ox > W + 100) continue;
-        drawObs(ctx, o.t, ox, o.y, o.w, o.h, t);
+        drawObs(ctx, o, ox, t);
       }
       
       // Fog warning & organic fog rendering
@@ -2326,32 +2343,312 @@ export default function SantaSleighRun() {
     ctx.restore();
   }
   
-  function drawObs(ctx, type, x, y, w, h, t = 0) {
+  function drawObs(ctx, obs, x, t = 0) {
+    const { t: type, y, w, h, treeType, varSeed = 0 } = obs;
+    
     if (type === 'tree') {
-      ctx.fillStyle = '#5c3317';
-      ctx.fillRect(x + w/2 - 5, y + h - 30, 10, 30);
-      ctx.fillStyle = '#1a472a';
-      ctx.beginPath();
-      ctx.moveTo(x + w/2, y);
-      ctx.lineTo(x, y + h - 20);
-      ctx.lineTo(x + w, y + h - 20);
-      ctx.fill();
-      ctx.fillStyle = '#fff';
-      ctx.beginPath();
-      ctx.moveTo(x + w/2, y);
-      ctx.lineTo(x + w/2 - 15, y + 20);
-      ctx.lineTo(x + w/2 + 15, y + 20);
-      ctx.fill();
-    } else if (type === 'bldg') {
-      ctx.fillStyle = '#4a5568';
-      ctx.fillRect(x, y, w, h);
-      ctx.fillStyle = '#ffd700';
-      const rows = Math.floor(h / 30), cols = Math.floor(w / 20);
-      for (let r = 0; r < rows; r++) {
-        for (let c = 0; c < cols; c++) {
-          if ((r + c) % 2 === 0) ctx.fillRect(x + 5 + c * 18, y + 10 + r * 28, 12, 18);
+      const centerX = x + w/2;
+      const trunkW = 8 + varSeed * 4;
+      const trunkH = 25 + varSeed * 10;
+      
+      if (treeType === 'pine') {
+        // === PINE TREE (16-bit style) ===
+        // Trunk with bark texture
+        ctx.fillStyle = '#4a3728';
+        ctx.fillRect(centerX - trunkW/2, y + h - trunkH, trunkW, trunkH);
+        // Bark texture lines
+        ctx.strokeStyle = '#3d2b1f';
+        ctx.lineWidth = 1;
+        for (let i = 0; i < 4; i++) {
+          const bx = centerX - trunkW/2 + 2 + (i * trunkW/4);
+          ctx.beginPath();
+          ctx.moveTo(bx, y + h - trunkH + 5);
+          ctx.lineTo(bx + (varSeed - 0.5) * 3, y + h - 5);
+          ctx.stroke();
+        }
+        
+        // Multiple triangle layers for pine shape
+        const layers = 3;
+        for (let layer = 0; layer < layers; layer++) {
+          const layerY = y + (layer * h * 0.25);
+          const layerH = h * 0.45 - layer * 5;
+          const layerW = w * (1 - layer * 0.15);
+          
+          // Dark green base
+          ctx.fillStyle = '#1a472a';
+          ctx.beginPath();
+          ctx.moveTo(centerX, layerY);
+          ctx.lineTo(centerX - layerW/2, layerY + layerH);
+          ctx.lineTo(centerX + layerW/2, layerY + layerH);
+          ctx.closePath();
+          ctx.fill();
+          
+          // Mid-tone texture stripes (16-bit dithering effect)
+          ctx.fillStyle = '#2d5a3d';
+          for (let stripe = 0; stripe < 4; stripe++) {
+            const stripeY = layerY + layerH * 0.2 + stripe * (layerH * 0.18);
+            const stripeW = layerW * (1 - (stripeY - layerY) / layerH) * 0.8;
+            ctx.beginPath();
+            ctx.moveTo(centerX - stripeW/2, stripeY);
+            ctx.lineTo(centerX + stripeW/2, stripeY);
+            ctx.lineTo(centerX + stripeW/2 - 3, stripeY + 4);
+            ctx.lineTo(centerX - stripeW/2 + 3, stripeY + 4);
+            ctx.closePath();
+            ctx.fill();
+          }
+          
+          // Highlight on left edge
+          ctx.fillStyle = '#3d7a5a';
+          ctx.beginPath();
+          ctx.moveTo(centerX, layerY);
+          ctx.lineTo(centerX - layerW/2, layerY + layerH);
+          ctx.lineTo(centerX - layerW/4, layerY + layerH * 0.7);
+          ctx.closePath();
+          ctx.fill();
+        }
+        
+        // Snow on top
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.moveTo(centerX, y);
+        ctx.lineTo(centerX - 12, y + 18);
+        ctx.lineTo(centerX + 12, y + 18);
+        ctx.closePath();
+        ctx.fill();
+        // Snow shadow
+        ctx.fillStyle = '#d0e8f0';
+        ctx.beginPath();
+        ctx.moveTo(centerX + 3, y + 5);
+        ctx.lineTo(centerX + 12, y + 18);
+        ctx.lineTo(centerX + 5, y + 15);
+        ctx.closePath();
+        ctx.fill();
+        
+      } else if (treeType === 'oak') {
+        // === OAK TREE (16-bit style) ===
+        // Thick trunk with texture
+        const oakTrunkW = trunkW * 1.5;
+        ctx.fillStyle = '#5c4033';
+        ctx.fillRect(centerX - oakTrunkW/2, y + h * 0.5, oakTrunkW, h * 0.5);
+        // Bark texture
+        ctx.fillStyle = '#4a3429';
+        for (let i = 0; i < 3; i++) {
+          ctx.fillRect(centerX - oakTrunkW/2 + 2 + i * (oakTrunkW/3), y + h * 0.55, 3, h * 0.4);
+        }
+        // Trunk highlight
+        ctx.fillStyle = '#7a5c45';
+        ctx.fillRect(centerX - oakTrunkW/2 + 1, y + h * 0.5, 3, h * 0.48);
+        
+        // Leafy canopy - multiple overlapping circles
+        const canopyY = y + h * 0.15;
+        const canopyH = h * 0.55;
+        
+        // Dark green shadow layer
+        ctx.fillStyle = '#2d5a2d';
+        ctx.beginPath();
+        ctx.arc(centerX - 8, canopyY + canopyH * 0.6, w * 0.35, 0, Math.PI * 2);
+        ctx.arc(centerX + 10, canopyY + canopyH * 0.7, w * 0.3, 0, Math.PI * 2);
+        ctx.arc(centerX, canopyY + canopyH * 0.8, w * 0.25, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Main green layer
+        ctx.fillStyle = '#3d8b3d';
+        ctx.beginPath();
+        ctx.arc(centerX, canopyY + canopyH * 0.3, w * 0.4, 0, Math.PI * 2);
+        ctx.arc(centerX - 12, canopyY + canopyH * 0.45, w * 0.35, 0, Math.PI * 2);
+        ctx.arc(centerX + 12, canopyY + canopyH * 0.45, w * 0.35, 0, Math.PI * 2);
+        ctx.arc(centerX - 5, canopyY + canopyH * 0.55, w * 0.3, 0, Math.PI * 2);
+        ctx.arc(centerX + 8, canopyY + canopyH * 0.55, w * 0.28, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Highlight layer (lighter spots)
+        ctx.fillStyle = '#5aaa5a';
+        ctx.beginPath();
+        ctx.arc(centerX - 8, canopyY + canopyH * 0.25, w * 0.2, 0, Math.PI * 2);
+        ctx.arc(centerX + 5, canopyY + canopyH * 0.35, w * 0.15, 0, Math.PI * 2);
+        ctx.arc(centerX - 3, canopyY + canopyH * 0.45, w * 0.12, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Dithered texture dots for 16-bit effect
+        ctx.fillStyle = '#4d9a4d';
+        for (let i = 0; i < 15; i++) {
+          const dotX = centerX + (varSeed * 100 + i * 17) % 30 - 15;
+          const dotY = canopyY + canopyH * 0.2 + (i * 13) % (canopyH * 0.5);
+          ctx.fillRect(dotX, dotY, 2, 2);
+        }
+        
+      } else if (treeType === 'magnolia') {
+        // === MAGNOLIA TREE (16-bit style) ===
+        // Elegant curved trunk
+        ctx.fillStyle = '#6b5344';
+        ctx.beginPath();
+        ctx.moveTo(centerX - 5, y + h);
+        ctx.quadraticCurveTo(centerX - 8, y + h * 0.7, centerX - 3, y + h * 0.4);
+        ctx.lineTo(centerX + 3, y + h * 0.4);
+        ctx.quadraticCurveTo(centerX + 8, y + h * 0.7, centerX + 5, y + h);
+        ctx.closePath();
+        ctx.fill();
+        // Trunk texture
+        ctx.strokeStyle = '#5a4538';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(centerX, y + h * 0.45);
+        ctx.quadraticCurveTo(centerX + 2, y + h * 0.7, centerX, y + h - 5);
+        ctx.stroke();
+        
+        // Branches
+        ctx.strokeStyle = '#6b5344';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(centerX, y + h * 0.5);
+        ctx.quadraticCurveTo(centerX - 15, y + h * 0.35, centerX - 20, y + h * 0.25);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(centerX, y + h * 0.45);
+        ctx.quadraticCurveTo(centerX + 12, y + h * 0.3, centerX + 18, y + h * 0.2);
+        ctx.stroke();
+        
+        // Large glossy leaves - oval shapes
+        const leafPositions = [
+          { lx: -18, ly: 0.15, rot: -0.3 },
+          { lx: 15, ly: 0.12, rot: 0.4 },
+          { lx: -8, ly: 0.08, rot: -0.1 },
+          { lx: 8, ly: 0.1, rot: 0.2 },
+          { lx: 0, ly: 0.05, rot: 0 },
+          { lx: -12, ly: 0.25, rot: -0.2 },
+          { lx: 12, ly: 0.22, rot: 0.3 }
+        ];
+        
+        for (const leaf of leafPositions) {
+          ctx.save();
+          ctx.translate(centerX + leaf.lx, y + h * leaf.ly);
+          ctx.rotate(leaf.rot);
+          
+          // Leaf shadow
+          ctx.fillStyle = '#1a4d1a';
+          ctx.beginPath();
+          ctx.ellipse(2, 2, 12, 8, 0, 0, Math.PI * 2);
+          ctx.fill();
+          
+          // Main leaf
+          ctx.fillStyle = '#2d6b2d';
+          ctx.beginPath();
+          ctx.ellipse(0, 0, 12, 8, 0, 0, Math.PI * 2);
+          ctx.fill();
+          
+          // Leaf highlight
+          ctx.fillStyle = '#4d8b4d';
+          ctx.beginPath();
+          ctx.ellipse(-3, -2, 6, 4, -0.3, 0, Math.PI * 2);
+          ctx.fill();
+          
+          // Leaf vein
+          ctx.strokeStyle = '#3d7a3d';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(-10, 0);
+          ctx.lineTo(10, 0);
+          ctx.stroke();
+          
+          ctx.restore();
+        }
+        
+        // White magnolia flowers (2-3 blooms)
+        const flowerPositions = [
+          { fx: -10, fy: 0.18 },
+          { fx: 12, fy: 0.15 },
+          { fx: 0, fy: 0.08 }
+        ];
+        
+        for (let fi = 0; fi < (2 + Math.floor(varSeed * 2)); fi++) {
+          const flower = flowerPositions[fi];
+          const fx = centerX + flower.fx;
+          const fy = y + h * flower.fy;
+          
+          // Flower petals
+          ctx.fillStyle = '#fff8f0';
+          for (let p = 0; p < 6; p++) {
+            const angle = (p / 6) * Math.PI * 2;
+            ctx.beginPath();
+            ctx.ellipse(fx + Math.cos(angle) * 5, fy + Math.sin(angle) * 5, 6, 4, angle, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          // Flower center
+          ctx.fillStyle = '#ffeb99';
+          ctx.beginPath();
+          ctx.arc(fx, fy, 4, 0, Math.PI * 2);
+          ctx.fill();
+          // Center detail
+          ctx.fillStyle = '#e6c54d';
+          ctx.beginPath();
+          ctx.arc(fx, fy, 2, 0, Math.PI * 2);
+          ctx.fill();
         }
       }
+      
+    } else if (type === 'bldg') {
+      // === BUILDING (16-bit style) ===
+      // Base color with slight variation
+      const baseHue = 220 + varSeed * 40;
+      ctx.fillStyle = `hsl(${baseHue}, 15%, 35%)`;
+      ctx.fillRect(x, y, w, h);
+      
+      // Left side shadow
+      ctx.fillStyle = `hsl(${baseHue}, 15%, 25%)`;
+      ctx.fillRect(x, y, 4, h);
+      
+      // Right side highlight
+      ctx.fillStyle = `hsl(${baseHue}, 15%, 45%)`;
+      ctx.fillRect(x + w - 4, y, 4, h);
+      
+      // Roof
+      ctx.fillStyle = `hsl(${baseHue}, 10%, 28%)`;
+      ctx.fillRect(x - 3, y - 8, w + 6, 12);
+      ctx.fillStyle = `hsl(${baseHue}, 10%, 38%)`;
+      ctx.fillRect(x - 3, y - 8, w + 6, 4);
+      
+      // Windows with glow effect
+      const rows = Math.floor(h / 35);
+      const cols = Math.floor(w / 22);
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const wx = x + 8 + c * 20;
+          const wy = y + 15 + r * 32;
+          const lit = ((r + c + Math.floor(varSeed * 10)) % 3) !== 0;
+          
+          if (lit) {
+            // Window glow
+            ctx.fillStyle = 'rgba(255, 230, 150, 0.3)';
+            ctx.fillRect(wx - 2, wy - 2, 16, 22);
+            // Window
+            ctx.fillStyle = '#ffdd77';
+            ctx.fillRect(wx, wy, 12, 18);
+            // Window panes
+            ctx.fillStyle = '#cc9933';
+            ctx.fillRect(wx + 5, wy, 2, 18);
+            ctx.fillRect(wx, wy + 8, 12, 2);
+          } else {
+            // Dark window
+            ctx.fillStyle = '#2a3a4a';
+            ctx.fillRect(wx, wy, 12, 18);
+            // Window frame
+            ctx.strokeStyle = '#3a4a5a';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(wx, wy, 12, 18);
+          }
+        }
+      }
+      
+      // Brick texture (dithered pattern)
+      ctx.fillStyle = `hsl(${baseHue}, 12%, 32%)`;
+      for (let by = y + 5; by < y + h - 5; by += 8) {
+        const offset = (Math.floor(by / 8) % 2) * 10;
+        for (let bx = x + 5 + offset; bx < x + w - 5; bx += 20) {
+          ctx.fillRect(bx, by, 1, 1);
+          ctx.fillRect(bx + 8, by + 4, 1, 1);
+        }
+      }
+      
     } else if (type === 'plane') {
       // Plane flying left (nose pointing left)
       ctx.fillStyle = '#e0e0e0';
@@ -2532,6 +2829,7 @@ export default function SantaSleighRun() {
           s.goodies = [];
           s.lastGoodyTime = 0;
           s.inFinalShaft = false;
+          s.lastFrameTime = 0; // Reset for clean timing
           initSeg();
         } else if (s.mode === 'WIN' || s.mode === 'GAME_OVER') {
           Object.assign(s, {
@@ -2585,8 +2883,14 @@ export default function SantaSleighRun() {
       boxSizing: 'border-box',
       margin: 0,
       fontFamily: '"Press Start 2P", "Courier New", monospace',
-      overflow: 'auto'
-    }}>
+      overflow: 'auto',
+      // Prevent text selection on mobile
+      userSelect: mobile ? 'none' : 'auto',
+      WebkitUserSelect: mobile ? 'none' : 'auto',
+      WebkitTouchCallout: mobile ? 'none' : 'auto'
+    }}
+    onContextMenu={mobile ? (e) => e.preventDefault() : undefined}
+    >
       {/* Retro Christmas decorations */}
       <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 8, background: 'repeating-linear-gradient(90deg, #ff0000 0px, #ff0000 20px, #00ff00 20px, #00ff00 40px)' }} />
       <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 8, background: 'repeating-linear-gradient(90deg, #00ff00 0px, #00ff00 20px, #ff0000 20px, #ff0000 40px)' }} />
@@ -2649,6 +2953,7 @@ export default function SantaSleighRun() {
               s.goodies = [];
               s.lastGoodyTime = 0;
               s.inFinalShaft = false;
+              s.lastFrameTime = 0; // Reset for clean timing
               initSeg();
               setTick(t => t + 1); // Force re-render
             }
@@ -2724,26 +3029,30 @@ export default function SantaSleighRun() {
           }}>
             <div />
             <button 
-              onTouchStart={() => { state.current.keys['ArrowUp'] = true; }}
-              onTouchEnd={() => { state.current.keys['ArrowUp'] = false; }}
+              onTouchStart={(e) => { e.preventDefault(); state.current.keys['ArrowUp'] = true; }}
+              onTouchEnd={(e) => { e.preventDefault(); state.current.keys['ArrowUp'] = false; }}
+              onContextMenu={(e) => e.preventDefault()}
               style={mobileButtonStyle}
             >▲</button>
             <div />
             <button 
-              onTouchStart={() => { state.current.keys['ArrowLeft'] = true; }}
-              onTouchEnd={() => { state.current.keys['ArrowLeft'] = false; }}
+              onTouchStart={(e) => { e.preventDefault(); state.current.keys['ArrowLeft'] = true; }}
+              onTouchEnd={(e) => { e.preventDefault(); state.current.keys['ArrowLeft'] = false; }}
+              onContextMenu={(e) => e.preventDefault()}
               style={mobileButtonStyle}
             >◀</button>
             <div style={{ ...mobileButtonStyle, background: '#333' }} />
             <button 
-              onTouchStart={() => { state.current.keys['ArrowRight'] = true; }}
-              onTouchEnd={() => { state.current.keys['ArrowRight'] = false; }}
+              onTouchStart={(e) => { e.preventDefault(); state.current.keys['ArrowRight'] = true; }}
+              onTouchEnd={(e) => { e.preventDefault(); state.current.keys['ArrowRight'] = false; }}
+              onContextMenu={(e) => e.preventDefault()}
               style={mobileButtonStyle}
             >▶</button>
             <div />
             <button 
-              onTouchStart={() => { state.current.keys['ArrowDown'] = true; }}
-              onTouchEnd={() => { state.current.keys['ArrowDown'] = false; }}
+              onTouchStart={(e) => { e.preventDefault(); state.current.keys['ArrowDown'] = true; }}
+              onTouchEnd={(e) => { e.preventDefault(); state.current.keys['ArrowDown'] = false; }}
+              onContextMenu={(e) => e.preventDefault()}
               style={mobileButtonStyle}
             >▼</button>
             <div />
@@ -2752,8 +3061,9 @@ export default function SantaSleighRun() {
           {/* A/B buttons on right */}
           <div style={{ display: 'flex', gap: 15, alignItems: 'center' }}>
             <button 
-              onTouchStart={() => { state.current.keys['r'] = true; }}
-              onTouchEnd={() => { state.current.keys['r'] = false; }}
+              onTouchStart={(e) => { e.preventDefault(); state.current.keys['r'] = true; }}
+              onTouchEnd={(e) => { e.preventDefault(); state.current.keys['r'] = false; }}
+              onContextMenu={(e) => e.preventDefault()}
               style={{ 
                 ...mobileButtonStyle, 
                 width: 55, 
@@ -2764,8 +3074,9 @@ export default function SantaSleighRun() {
               }}
             >B<br/><span style={{fontSize: 7}}>Nose</span></button>
             <button 
-              onTouchStart={() => { state.current.keys[' '] = true; }}
-              onTouchEnd={() => { state.current.keys[' '] = false; }}
+              onTouchStart={(e) => { e.preventDefault(); state.current.keys[' '] = true; }}
+              onTouchEnd={(e) => { e.preventDefault(); state.current.keys[' '] = false; }}
+              onContextMenu={(e) => e.preventDefault()}
               style={{ 
                 ...mobileButtonStyle, 
                 width: 65, 
@@ -2846,5 +3157,7 @@ const mobileButtonStyle = {
   justifyContent: 'center',
   userSelect: 'none',
   WebkitUserSelect: 'none',
-  touchAction: 'manipulation'
+  WebkitTouchCallout: 'none',
+  touchAction: 'manipulation',
+  WebkitTapHighlightColor: 'transparent'
 };
