@@ -63,17 +63,17 @@ function genFlight(id, len = 3000, W = BASE_W, H = BASE_H) {
   }
   
   // Airborne obstacles (planes, blimps, storm clouds)
-  const airborneSpacing = final ? 150 : 400;
+  const airborneSpacing = final ? 180 : 400;
   const airborneEnd = final ? len - 500 : len - 600;
   for (let x = 400; x < airborneEnd; x += airborneSpacing) {
     s++;
-    const threshold = final ? 0.7 : 0.3; // More airborne obstacles in final
+    const threshold = final ? 0.55 : 0.3; // Slightly fewer obstacles in final
     if (seed(s) < threshold) {
       const typeRand = seed(s+1);
       let t;
-      if (typeRand < 0.30) t = 'plane';
-      else if (typeRand < 0.55) t = 'blimp';
-      else t = 'storm';
+      if (typeRand < 0.35) t = 'plane';
+      else if (typeRand < 0.70) t = 'blimp';
+      else t = 'storm'; // Reduced from 45% to 30% storms
       
       const baseY = t === 'storm' ? 30 + seed(s+2) * 60 : 100 + seed(s+2) * 200;
       obs.push({ 
