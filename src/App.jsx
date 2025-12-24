@@ -501,13 +501,13 @@ export default function SantaSleighRun() {
         if (!final) {
           // Check if we should spawn a new fog:
           // 1. No active fog currently exists
-          // 2. At least 3 seconds since game start (readyTime)
-          // 3. At least 5 seconds since last fog was cleared
+          // 2. At least 5 seconds since game start (readyTime)
+          // 3. At least 7 seconds since last fog was cleared
           const timeSinceStart = t - s.readyTime;
           const timeSinceFogClear = s.lastFogClearTime > 0 ? t - s.lastFogClearTime : Infinity;
           const noActiveFog = !activeFogExists || s.seg.fogs.every(f => f.cleared);
           
-          if (noActiveFog && timeSinceStart > 3000 && (s.lastFogClearTime === 0 || timeSinceFogClear > 5000)) {
+          if (noActiveFog && timeSinceStart > 5000 && (s.lastFogClearTime === 0 || timeSinceFogClear > 7000)) {
             // Spawn new fog ahead of the player
             const fogX = s.scrollX + W + 100 + Math.random() * 200;
             const fogW = 200 + Math.random() * 150;
