@@ -678,6 +678,7 @@ export default function SantaSleighRun() {
           // Award points for remaining lives
           s.score += s.lives * POINTS_PER_LIFE;
           s.mode = 'WIN'; 
+          setTick(tk => tk + 1);
         }
         else {
           // Award points for remaining energy when landing in city
@@ -708,7 +709,7 @@ export default function SantaSleighRun() {
       
       if (s.scrollX > s.seg.len) {
         s.segIdx++;
-        if (s.segIdx >= SEGMENTS.length) s.mode = 'WIN';
+        if (s.segIdx >= SEGMENTS.length) { s.mode = 'WIN'; setTick(tk => tk + 1); }
         else initSeg();
       }
     }
@@ -843,7 +844,7 @@ export default function SantaSleighRun() {
         s.segIdx++;
         s.goodies = []; // Clear goodies
         s.lastGoodyTime = t; // Reset goody timer
-        if (s.segIdx >= SEGMENTS.length) s.mode = 'WIN';
+        if (s.segIdx >= SEGMENTS.length) { s.mode = 'WIN'; setTick(tk => tk + 1); }
         else if (currentSeg.id === 'dc') {
           // Show DC interstitial after completing Washington DC
           s.mode = 'DC_INTERSTITIAL';
@@ -2213,8 +2214,8 @@ export default function SantaSleighRun() {
       ctx.fillRect(0, 0, W, H);
       
       // Pop-over window
-      const popW = W * 0.7;
-      const popH = H * 0.85;
+      const popW = W * 0.75;
+      const popH = H * 0.9;
       const popX = (W - popW) / 2;
       const popY = (H - popH) / 2;
       
@@ -2235,9 +2236,9 @@ export default function SantaSleighRun() {
       ctx.lineWidth = 2;
       ctx.strokeRect(popX + 8, popY + 8, popW - 16, popH - 16);
       
-      // Image - square aspect ratio
-      const imgSize = popH * 0.40;
-      const imgY = popY + 20;
+      // Image - enlarged to fill more space
+      const imgSize = popH * 0.58;
+      const imgY = popY + 15;
       
       if (dcImageLoaded && dcImageRef.current) {
         const img = dcImageRef.current;
@@ -2266,30 +2267,30 @@ export default function SantaSleighRun() {
       
       // "Santa!" header
       ctx.fillStyle = '#ff3333';
-      ctx.font = 'bold 28px Georgia';
+      ctx.font = 'bold 26px Georgia';
       ctx.textAlign = 'center';
-      ctx.fillText('Santa!', W/2, popY + popH * 0.52);
+      ctx.fillText('Santa!', W/2, popY + popH * 0.66);
       
       // Message text
       ctx.fillStyle = '#fff';
-      ctx.font = '16px Georgia';
-      ctx.fillText('The girls are still asleep, but not for long!', W/2, popY + popH * 0.60);
+      ctx.font = '15px Georgia';
+      ctx.fillText('The girls are still asleep, but not for long!', W/2, popY + popH * 0.73);
       
       ctx.fillStyle = '#ffd700';
-      ctx.font = 'bold 20px Georgia';
-      ctx.fillText('🌟 Hurry! 🌟', W/2, popY + popH * 0.68);
+      ctx.font = 'bold 18px Georgia';
+      ctx.fillText('🌟 Hurry! 🌟', W/2, popY + popH * 0.80);
       
       // Show countdown if active, otherwise show button
       if (dcCountdown > 0) {
         ctx.fillStyle = '#00ff00';
-        ctx.font = 'bold 72px Georgia';
-        ctx.fillText(dcCountdown.toString(), W/2, popY + popH * 0.85);
+        ctx.font = 'bold 60px Georgia';
+        ctx.fillText(dcCountdown.toString(), W/2, popY + popH * 0.93);
       } else {
         // Draw "Let's go!" button inside pop-over
-        const btnW = 200;
-        const btnH = 50;
+        const btnW = 180;
+        const btnH = 45;
         const btnX = (W - btnW) / 2;
-        const btnY = popY + popH * 0.78;
+        const btnY = popY + popH * 0.86;
         
         // Store button bounds for click detection
         s.dcButtonBounds = { x: btnX, y: btnY, w: btnW, h: btnH };
