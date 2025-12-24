@@ -254,6 +254,14 @@ export default function SantaSleighRun() {
   
   const W = BASE_W, H = BASE_H; // Always use base dimensions internally
   
+  // Preload intro image
+  const introImageRef = useRef(null);
+  useEffect(() => {
+    const img = new Image();
+    img.src = '/assets/SallyMillieRetroArcade.png';
+    introImageRef.current = img;
+  }, []);
+  
   const state = useRef({
     mode: 'TITLE', lives: LIVES, energy: MAX_ENERGY, segIdx: 0,
     px: 150, py: 250, pw: 25, ph: 15, vx: 0, vy: 0, ground: false,
@@ -711,6 +719,63 @@ export default function SantaSleighRun() {
     // Clear
     ctx.fillStyle = '#0d1b2a';
     ctx.fillRect(0, 0, W, H);
+    
+    if (s.mode === 'INTRO') {
+      // Simple dark background
+      ctx.fillStyle = '#0a1628';
+      ctx.fillRect(0, 0, W, H);
+      
+      // Stars
+      ctx.fillStyle = '#fff';
+      for (let i = 0; i < 80; i++) {
+        ctx.beginPath();
+        ctx.arc((i * 137) % W, (i * 89) % (H * 0.7), ((i * 13) % 3) + 1, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      
+      // Draw the intro image centered (with safety checks)
+      if (introImageRef.current && introImageRef.current.complete && introImageRef.current.naturalWidth > 0) {
+        const img = introImageRef.current;
+        const maxW = W * 0.5;
+        const maxH = H * 0.4;
+        const scale = Math.min(maxW / img.naturalWidth, maxH / img.naturalHeight, 1);
+        const imgW = img.naturalWidth * scale;
+        const imgH = img.naturalHeight * scale;
+        const imgX = (W - imgW) / 2;
+        const imgY = 30;
+        
+        // Simple frame
+        ctx.strokeStyle = '#ffd700';
+        ctx.lineWidth = 4;
+        ctx.strokeRect(imgX - 5, imgY - 5, imgW + 10, imgH + 10);
+        
+        ctx.drawImage(img, imgX, imgY, imgW, imgH);
+      }
+      
+      // "Santa!" header
+      ctx.fillStyle = '#ff3333';
+      ctx.font = 'bold 36px Georgia';
+      ctx.textAlign = 'center';
+      ctx.fillText('Santa!', W/2, H * 0.52);
+      
+      // Message text
+      ctx.fillStyle = '#fff';
+      ctx.font = '18px Georgia';
+      ctx.fillText('Sally and Millie Spaulding of', W/2, H * 0.60);
+      ctx.fillText('Nashville, Tennessee have been', W/2, H * 0.66);
+      ctx.fillText('especially good this year!', W/2, H * 0.72);
+      
+      ctx.fillStyle = '#ffd700';
+      ctx.font = 'bold 20px Georgia';
+      ctx.fillText('Get to Nashville ASAP!', W/2, H * 0.80);
+      
+      // Blinking prompt
+      if (Math.floor(t / 500) % 2) {
+        ctx.fillStyle = '#00ff00';
+        ctx.font = 'bold 20px Georgia';
+        ctx.fillText('Click "Let\'s go!" below', W/2, H * 0.90);
+      }
+    }
     
     if (s.mode === 'TITLE') {
       // Stars
@@ -2820,7 +2885,7 @@ export default function SantaSleighRun() {
       
       if (down && e.key === 'Enter') {
         const s = state.current;
-        if (s.mode === 'TITLE') {
+        if (s.mode === 'INTRO') {
           s.mode = 'FLIGHT';
           s.lives = LIVES;
           s.energy = MAX_ENERGY;
@@ -2829,8 +2894,16 @@ export default function SantaSleighRun() {
           s.goodies = [];
           s.lastGoodyTime = 0;
           s.inFinalShaft = false;
-          s.lastFrameTime = 0; // Reset for clean timing
-          initSeg();
+          s.lastFrameTime = 0;
+          // Initialize segment directly
+          s.scrollX = 0;
+          s.seg = genFlight(SEGMENTS[0].id);
+          s.px = 150; s.py = 250; s.vx = 0; s.vy = 0;
+          s.readyTime = performance.now();
+          setTick(t => t + 1);
+        } else if (s.mode === 'TITLE') {
+          s.mode = 'INTRO';
+          setTick(t => t + 1);
         } else if (s.mode === 'WIN' || s.mode === 'GAME_OVER') {
           Object.assign(s, {
             mode: 'TITLE', lives: LIVES, energy: MAX_ENERGY, segIdx: 0,
@@ -2939,22 +3012,79 @@ export default function SantaSleighRun() {
         maxWidth: '100%'
       }} tabIndex={0} />
       
+      {/* INTRO screen "Let's go!" button - always rendered but hidden when not in INTRO mode */}
+      <button
+        onClick={() => {
+          const s = state.current;
+          if (s.mode === 'INTRO') {
+            s.mode = 'FLIGHT';
+            s.lives = LIVES;
+            s.energy = MAX_ENERGY;
+            s.segIdx = 0;
+            s.score = 0;
+            s.goodies = [];
+            s.lastGoodyTime = 0;
+            s.inFinalShaft = false;
+            s.lastFrameTime = 0;
+            // Initialize segment directly
+            s.scrollX = 0;
+            s.seg = genFlight(SEGMENTS[0].id);
+            s.px = 150; s.py = 250; s.vx = 0; s.vy = 0;
+            s.readyTime = performance.now();
+            setTick(t => t + 1);
+          }
+        }}
+        onTouchEnd={(e) => {
+          e.preventDefault();
+          const s = state.current;
+          if (s.mode === 'INTRO') {
+            s.mode = 'FLIGHT';
+            s.lives = LIVES;
+            s.energy = MAX_ENERGY;
+            s.segIdx = 0;
+            s.score = 0;
+            s.goodies = [];
+            s.lastGoodyTime = 0;
+            s.inFinalShaft = false;
+            s.lastFrameTime = 0;
+            s.scrollX = 0;
+            s.seg = genFlight(SEGMENTS[0].id);
+            s.px = 150; s.py = 250; s.vx = 0; s.vy = 0;
+            s.readyTime = performance.now();
+            setTick(t => t + 1);
+          }
+        }}
+        style={{
+          display: state.current.mode === 'INTRO' ? 'block' : 'none',
+          marginTop: 20,
+          padding: mobile ? '15px 40px' : '18px 50px',
+          fontSize: mobile ? 18 : 22,
+          fontFamily: '"Press Start 2P", "Courier New", monospace',
+          background: 'linear-gradient(180deg, #ff6b6b, #cc0000)',
+          color: '#fff',
+          border: '4px solid #ffd700',
+          borderRadius: 12,
+          cursor: 'pointer',
+          boxShadow: '0 0 25px #ff6b6b, 0 0 50px rgba(255,107,107,0.5)',
+          textShadow: '2px 2px 0 #000',
+          animation: 'pulse 1s infinite',
+          transition: 'transform 0.1s',
+          position: 'relative',
+          zIndex: 100
+        }}
+        onMouseOver={(e) => e.target.style.transform = 'scale(1.05)'}
+        onMouseOut={(e) => e.target.style.transform = 'scale(1)'}
+      >
+        🎅 Let's go! 🦌
+      </button>
+      
       {/* Mobile START button */}
       {mobile && state.current.mode === 'TITLE' && (
         <button
           onClick={() => {
             const s = state.current;
             if (s.mode === 'TITLE') {
-              s.mode = 'FLIGHT';
-              s.lives = LIVES;
-              s.energy = MAX_ENERGY;
-              s.segIdx = 0;
-              s.score = 0;
-              s.goodies = [];
-              s.lastGoodyTime = 0;
-              s.inFinalShaft = false;
-              s.lastFrameTime = 0; // Reset for clean timing
-              initSeg();
+              s.mode = 'INTRO';
               setTick(t => t + 1); // Force re-render
             }
           }}
