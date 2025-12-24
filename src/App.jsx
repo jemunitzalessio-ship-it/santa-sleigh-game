@@ -275,6 +275,39 @@ export default function SantaSleighRun() {
     };
     img.src = '/assets/SallyMillieRetroArcade.png';
   }, []);
+
+  // Preload DC interstitial image
+  const dcImageRef = useRef(null);
+  const [dcImageLoaded, setDcImageLoaded] = useState(false);
+  useEffect(() => {
+    const img = new Image();
+    img.onload = () => {
+      dcImageRef.current = img;
+      setDcImageLoaded(true);
+    };
+    img.onerror = () => {
+      const img2 = new Image();
+      img2.onload = () => {
+        dcImageRef.current = img2;
+        setDcImageLoaded(true);
+      };
+      img2.src = 'assets/SMwithsquishmallowsArcade.png';
+    };
+    img.src = '/assets/SMwithsquishmallowsArcade.png';
+  }, []);
+
+  // DC interstitial countdown state
+  const [dcCountdown, setDcCountdown] = useState(0);
+  const dcCountdownRef = useRef(null);
+  
+  // Cleanup DC countdown interval on unmount
+  useEffect(() => {
+    return () => {
+      if (dcCountdownRef.current) {
+        clearInterval(dcCountdownRef.current);
+      }
+    };
+  }, []);
   
   const state = useRef({
     mode: 'TITLE', lives: LIVES, energy: MAX_ENERGY, segIdx: 0,
@@ -716,10 +749,15 @@ export default function SantaSleighRun() {
       }
       
       if (s.canExit && collide({ x: s.px, y: s.py, w: s.pw, h: s.ph }, s.cityLvl.sleigh)) {
+        const currentSeg = SEGMENTS[s.segIdx];
         s.segIdx++;
         s.goodies = []; // Clear goodies
         s.lastGoodyTime = t; // Reset goody timer
         if (s.segIdx >= SEGMENTS.length) s.mode = 'WIN';
+        else if (currentSeg.id === 'dc') {
+          // Show DC interstitial after completing Washington DC
+          s.mode = 'DC_INTERSTITIAL';
+        }
         else { s.mode = 'FLIGHT'; initSeg(); }
       }
     }
@@ -2014,7 +2052,115 @@ export default function SantaSleighRun() {
       ctx.textAlign = 'center';
       ctx.fillText(s.msg, W/2, H/2 + 5);
     }
-  }, [introImageLoaded]);
+    
+    // DC Interstitial pop-over (drawn on top of frozen game)
+    if (s.mode === 'DC_INTERSTITIAL') {
+      // Semi-transparent overlay
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+      ctx.fillRect(0, 0, W, H);
+      
+      // Pop-over window
+      const popW = W * 0.7;
+      const popH = H * 0.85;
+      const popX = (W - popW) / 2;
+      const popY = (H - popH) / 2;
+      
+      // Window background with gradient
+      const popGrad = ctx.createLinearGradient(popX, popY, popX, popY + popH);
+      popGrad.addColorStop(0, '#1a2a4a');
+      popGrad.addColorStop(1, '#0a1628');
+      ctx.fillStyle = popGrad;
+      ctx.fillRect(popX, popY, popW, popH);
+      
+      // Window border
+      ctx.strokeStyle = '#ffd700';
+      ctx.lineWidth = 4;
+      ctx.strokeRect(popX, popY, popW, popH);
+      
+      // Inner border
+      ctx.strokeStyle = '#ff6b6b';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(popX + 8, popY + 8, popW - 16, popH - 16);
+      
+      // Image - square aspect ratio
+      const imgSize = popH * 0.40;
+      const imgY = popY + 20;
+      
+      if (dcImageLoaded && dcImageRef.current) {
+        const img = dcImageRef.current;
+        const scale = Math.min(imgSize / img.naturalWidth, imgSize / img.naturalHeight);
+        const scaledW = img.naturalWidth * scale;
+        const scaledH = img.naturalHeight * scale;
+        const centeredX = (W - scaledW) / 2;
+        
+        ctx.strokeStyle = '#ffd700';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(centeredX - 4, imgY - 4, scaledW + 8, scaledH + 8);
+        ctx.drawImage(img, centeredX, imgY, scaledW, scaledH);
+      } else {
+        // Placeholder
+        const placeholderX = (W - imgSize) / 2;
+        ctx.strokeStyle = '#ffd700';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(placeholderX - 4, imgY - 4, imgSize + 8, imgSize + 8);
+        ctx.fillStyle = '#2a3a5a';
+        ctx.fillRect(placeholderX, imgY, imgSize, imgSize);
+        ctx.fillStyle = '#ffd700';
+        ctx.font = 'bold 36px Georgia';
+        ctx.textAlign = 'center';
+        ctx.fillText('🧸 🎄 🧸', W/2, imgY + imgSize/2);
+      }
+      
+      // "Santa!" header
+      ctx.fillStyle = '#ff3333';
+      ctx.font = 'bold 28px Georgia';
+      ctx.textAlign = 'center';
+      ctx.fillText('Santa!', W/2, popY + popH * 0.52);
+      
+      // Message text
+      ctx.fillStyle = '#fff';
+      ctx.font = '16px Georgia';
+      ctx.fillText('The girls are still asleep, but not for long!', W/2, popY + popH * 0.60);
+      
+      ctx.fillStyle = '#ffd700';
+      ctx.font = 'bold 20px Georgia';
+      ctx.fillText('🌟 Hurry! 🌟', W/2, popY + popH * 0.68);
+      
+      // Show countdown if active, otherwise show button
+      if (dcCountdown > 0) {
+        ctx.fillStyle = '#00ff00';
+        ctx.font = 'bold 72px Georgia';
+        ctx.fillText(dcCountdown.toString(), W/2, popY + popH * 0.85);
+      } else {
+        // Draw "Let's go!" button inside pop-over
+        const btnW = 200;
+        const btnH = 50;
+        const btnX = (W - btnW) / 2;
+        const btnY = popY + popH * 0.78;
+        
+        // Store button bounds for click detection
+        s.dcButtonBounds = { x: btnX, y: btnY, w: btnW, h: btnH };
+        
+        // Button background
+        const btnGrad = ctx.createLinearGradient(btnX, btnY, btnX, btnY + btnH);
+        btnGrad.addColorStop(0, '#ff6b6b');
+        btnGrad.addColorStop(1, '#cc0000');
+        ctx.fillStyle = btnGrad;
+        ctx.fillRect(btnX, btnY, btnW, btnH);
+        
+        // Button border
+        ctx.strokeStyle = '#ffd700';
+        ctx.lineWidth = 4;
+        ctx.strokeRect(btnX, btnY, btnW, btnH);
+        
+        // Button text
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 18px Georgia';
+        ctx.textAlign = 'center';
+        ctx.fillText("🎅 Let's go! 🦌", W/2, btnY + btnH/2 + 6);
+      }
+    }
+  }, [introImageLoaded, dcImageLoaded, dcCountdown]);
   
   // Draw iconic city monuments
   function drawMonument(ctx, type, x, groundY) {
@@ -3034,14 +3180,84 @@ export default function SantaSleighRun() {
         {paused ? '▶ RESUME' : '⏸ PAUSE'}
       </button>
       
-      <canvas ref={canvasRef} width={W} height={H} style={{ 
-        border: '4px solid #ffd700', 
-        borderRadius: 8, 
-        boxShadow: '0 0 30px rgba(255,215,0,0.5), 0 0 60px rgba(255,0,0,0.3), inset 0 0 30px rgba(0,0,0,0.5)',
-        width: mobile ? 'calc(100vw - 20px)' : W,
-        height: mobile ? `calc((100vw - 20px) * ${H/W})` : H,
-        maxWidth: '100%'
-      }} tabIndex={0} />
+      <canvas 
+        ref={canvasRef} 
+        width={W} 
+        height={H} 
+        onClick={(e) => {
+          const s = state.current;
+          if (s.mode === 'DC_INTERSTITIAL' && dcCountdown === 0 && s.dcButtonBounds) {
+            const rect = e.target.getBoundingClientRect();
+            const scaleX = W / rect.width;
+            const scaleY = H / rect.height;
+            const x = (e.clientX - rect.left) * scaleX;
+            const y = (e.clientY - rect.top) * scaleY;
+            const btn = s.dcButtonBounds;
+            
+            if (x >= btn.x && x <= btn.x + btn.w && y >= btn.y && y <= btn.y + btn.h) {
+              // Start countdown
+              setDcCountdown(3);
+              let count = 3;
+              dcCountdownRef.current = setInterval(() => {
+                count--;
+                setDcCountdown(count);
+                if (count <= 0) {
+                  clearInterval(dcCountdownRef.current);
+                  s.mode = 'FLIGHT';
+                  s.scrollX = 0;
+                  s.seg = genFlight(SEGMENTS[s.segIdx].id);
+                  s.px = 150; s.py = 250; s.vx = 0; s.vy = 0;
+                  s.readyTime = performance.now();
+                  setDcCountdown(0);
+                  setTick(t => t + 1);
+                }
+              }, 1000);
+            }
+          }
+        }}
+        onTouchEnd={(e) => {
+          const s = state.current;
+          if (s.mode === 'DC_INTERSTITIAL' && dcCountdown === 0 && s.dcButtonBounds) {
+            const rect = e.target.getBoundingClientRect();
+            const touch = e.changedTouches[0];
+            const scaleX = W / rect.width;
+            const scaleY = H / rect.height;
+            const x = (touch.clientX - rect.left) * scaleX;
+            const y = (touch.clientY - rect.top) * scaleY;
+            const btn = s.dcButtonBounds;
+            
+            if (x >= btn.x && x <= btn.x + btn.w && y >= btn.y && y <= btn.y + btn.h) {
+              e.preventDefault();
+              setDcCountdown(3);
+              let count = 3;
+              dcCountdownRef.current = setInterval(() => {
+                count--;
+                setDcCountdown(count);
+                if (count <= 0) {
+                  clearInterval(dcCountdownRef.current);
+                  s.mode = 'FLIGHT';
+                  s.scrollX = 0;
+                  s.seg = genFlight(SEGMENTS[s.segIdx].id);
+                  s.px = 150; s.py = 250; s.vx = 0; s.vy = 0;
+                  s.readyTime = performance.now();
+                  setDcCountdown(0);
+                  setTick(t => t + 1);
+                }
+              }, 1000);
+            }
+          }
+        }}
+        style={{ 
+          border: '4px solid #ffd700', 
+          borderRadius: 8, 
+          boxShadow: '0 0 30px rgba(255,215,0,0.5), 0 0 60px rgba(255,0,0,0.3), inset 0 0 30px rgba(0,0,0,0.5)',
+          width: mobile ? 'calc(100vw - 20px)' : W,
+          height: mobile ? `calc((100vw - 20px) * ${H/W})` : H,
+          maxWidth: '100%',
+          cursor: state.current.mode === 'DC_INTERSTITIAL' ? 'pointer' : 'default'
+        }} 
+        tabIndex={0} 
+      />
       
       {/* INTRO screen "Let's go!" button - always rendered but hidden when not in INTRO mode */}
       <button
