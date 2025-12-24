@@ -254,12 +254,26 @@ export default function SantaSleighRun() {
   
   const W = BASE_W, H = BASE_H; // Always use base dimensions internally
   
-  // Preload intro image
+  // Preload intro image - try multiple path patterns
   const introImageRef = useRef(null);
+  const [introImageLoaded, setIntroImageLoaded] = useState(false);
   useEffect(() => {
     const img = new Image();
+    // Try the provided path first
+    img.onload = () => {
+      introImageRef.current = img;
+      setIntroImageLoaded(true);
+    };
+    img.onerror = () => {
+      // If that fails, try without leading slash
+      const img2 = new Image();
+      img2.onload = () => {
+        introImageRef.current = img2;
+        setIntroImageLoaded(true);
+      };
+      img2.src = 'assets/SallyMillieRetroArcade.png';
+    };
     img.src = '/assets/SallyMillieRetroArcade.png';
-    introImageRef.current = img;
   }, []);
   
   const state = useRef({
@@ -733,47 +747,64 @@ export default function SantaSleighRun() {
         ctx.fill();
       }
       
-      // Draw the intro image centered (with safety checks)
-      if (introImageRef.current && introImageRef.current.complete && introImageRef.current.naturalWidth > 0) {
+      // Draw the intro image centered - square aspect ratio, scaled up
+      const imgSize = H * 0.45; // Square size based on height
+      const imgY = 15;
+      
+      if (introImageLoaded && introImageRef.current) {
         const img = introImageRef.current;
-        const maxW = W * 0.5;
-        const maxH = H * 0.4;
-        const scale = Math.min(maxW / img.naturalWidth, maxH / img.naturalHeight, 1);
-        const imgW = img.naturalWidth * scale;
-        const imgH = img.naturalHeight * scale;
-        const imgX = (W - imgW) / 2;
-        const imgY = 30;
+        const scale = Math.min(imgSize / img.naturalWidth, imgSize / img.naturalHeight);
+        const scaledW = img.naturalWidth * scale;
+        const scaledH = img.naturalHeight * scale;
+        const centeredX = (W - scaledW) / 2;
         
-        // Simple frame
+        // Frame
         ctx.strokeStyle = '#ffd700';
         ctx.lineWidth = 4;
-        ctx.strokeRect(imgX - 5, imgY - 5, imgW + 10, imgH + 10);
+        ctx.strokeRect(centeredX - 5, imgY - 5, scaledW + 10, scaledH + 10);
         
-        ctx.drawImage(img, imgX, imgY, imgW, imgH);
+        ctx.drawImage(img, centeredX, imgY, scaledW, scaledH);
+      } else {
+        // Placeholder frame with festive design
+        const placeholderX = (W - imgSize) / 2;
+        ctx.strokeStyle = '#ffd700';
+        ctx.lineWidth = 4;
+        ctx.strokeRect(placeholderX - 5, imgY - 5, imgSize + 10, imgSize + 10);
+        ctx.fillStyle = '#1a2a4a';
+        ctx.fillRect(placeholderX, imgY, imgSize, imgSize);
+        
+        // Decorative placeholder content
+        ctx.fillStyle = '#ffd700';
+        ctx.font = 'bold 48px Georgia';
+        ctx.textAlign = 'center';
+        ctx.fillText('🎄 🎅 🎄', W/2, imgY + imgSize/2 - 20);
+        ctx.font = '16px Georgia';
+        ctx.fillStyle = '#fff';
+        ctx.fillText('Sally & Millie', W/2, imgY + imgSize/2 + 20);
+        ctx.fillText('Spaulding', W/2, imgY + imgSize/2 + 45);
       }
       
-      // "Santa!" header
+      // "Santa!" header - positioned below image
       ctx.fillStyle = '#ff3333';
-      ctx.font = 'bold 36px Georgia';
+      ctx.font = 'bold 32px Georgia';
       ctx.textAlign = 'center';
-      ctx.fillText('Santa!', W/2, H * 0.52);
+      ctx.fillText('Santa!', W/2, H * 0.55);
       
-      // Message text
+      // Message text - single line, wider
       ctx.fillStyle = '#fff';
-      ctx.font = '18px Georgia';
-      ctx.fillText('Sally and Millie Spaulding of', W/2, H * 0.60);
-      ctx.fillText('Nashville, Tennessee have been', W/2, H * 0.66);
-      ctx.fillText('especially good this year!', W/2, H * 0.72);
+      ctx.font = '16px Georgia';
+      ctx.fillText('Sally and Millie Spaulding of Nashville, Tennessee', W/2, H * 0.63);
+      ctx.fillText('have been especially good this year!', W/2, H * 0.69);
       
       ctx.fillStyle = '#ffd700';
-      ctx.font = 'bold 20px Georgia';
-      ctx.fillText('Get to Nashville ASAP!', W/2, H * 0.80);
+      ctx.font = 'bold 18px Georgia';
+      ctx.fillText('🌟 Get to Nashville ASAP! 🌟', W/2, H * 0.77);
       
       // Blinking prompt
       if (Math.floor(t / 500) % 2) {
         ctx.fillStyle = '#00ff00';
-        ctx.font = 'bold 20px Georgia';
-        ctx.fillText('Click "Let\'s go!" below', W/2, H * 0.90);
+        ctx.font = 'bold 18px Georgia';
+        ctx.fillText('Click "Let\'s go!" below', W/2, H * 0.88);
       }
     }
     
@@ -1983,7 +2014,7 @@ export default function SantaSleighRun() {
       ctx.textAlign = 'center';
       ctx.fillText(s.msg, W/2, H/2 + 5);
     }
-  }, []);
+  }, [introImageLoaded]);
   
   // Draw iconic city monuments
   function drawMonument(ctx, type, x, groundY) {
