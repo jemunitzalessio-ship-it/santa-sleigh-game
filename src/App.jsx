@@ -91,12 +91,8 @@ function genFlight(id, len = 3000, W = BASE_W, H = BASE_H) {
     }
   }
   
-  if (!final) {
-    for (let x = 600; x < len - 800; x += 800) {
-      s++;
-      if (seed(s) < 0.5) fogs.push({ x, w: 200 + seed(s+1) * 150, cleared: false });
-    }
-  }
+  // Fogs are now spawned dynamically during gameplay - start with empty array
+  // This ensures only one fog at a time with proper timing
   
   // For final approach, create tall trees forming a narrow shaft
   let tallTrees = null;
@@ -329,6 +325,49 @@ export default function SantaSleighRun() {
     };
   }, []);
   
+  // High score system
+  const [highScores, setHighScores] = useState([]);
+  const [hsInitials, setHsInitials] = useState(['A', 'A', 'A']);
+  const [hsPosition, setHsPosition] = useState(0);
+  const [pendingScore, setPendingScore] = useState(0);
+  
+  // Load high scores from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('santaSleighRunHighScores');
+      if (saved) {
+        setHighScores(JSON.parse(saved));
+      }
+    } catch (e) {
+      console.log('Could not load high scores');
+    }
+  }, []);
+  
+  // Save high scores to localStorage
+  const saveHighScores = (scores) => {
+    try {
+      localStorage.setItem('santaSleighRunHighScores', JSON.stringify(scores));
+      setHighScores(scores);
+    } catch (e) {
+      console.log('Could not save high scores');
+    }
+  };
+  
+  // Check if score qualifies for high score board
+  const isHighScore = (score) => {
+    if (highScores.length < 5) return true;
+    return score > highScores[highScores.length - 1].score;
+  };
+  
+  // Add new high score
+  const addHighScore = (initials, score) => {
+    const newScore = { initials, score, date: new Date().toLocaleDateString() };
+    const newScores = [...highScores, newScore]
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5);
+    saveHighScores(newScores);
+  };
+  
   const state = useRef({
     mode: 'TITLE', lives: LIVES, energy: MAX_ENERGY, segIdx: 0,
     px: 150, py: 250, pw: 25, ph: 15, vx: 0, vy: 0, ground: false,
@@ -341,6 +380,7 @@ export default function SantaSleighRun() {
     beam: null, // { startTime, duration, targetX }
     dissolvingFogs: [], // { x, w, startTime, duration }
     fogPauseStart: 0, // Track when fog first appeared for gravity pause
+    lastFogClearTime: 0, // Track when last fog was cleared or passed off screen
     // Electric zap effect
     zap: null, // { startTime, duration, x, y }
     // Wind gust effect for city mode
@@ -357,7 +397,9 @@ export default function SantaSleighRun() {
     goodies: [], // { x, y, type: 'candy'|'cookie'|'cocoa', vy }
     lastGoodyTime: 0,
     // Final approach state
-    inFinalShaft: false // True when scrolling stops for vertical landing
+    inFinalShaft: false, // True when scrolling stops for vertical landing
+    // High score entry
+    finalScore: 0 // Store final score for high score entry
   });
   
   const initSeg = useCallback(() => {
@@ -368,6 +410,7 @@ export default function SantaSleighRun() {
     s.seg = genFlight(seg.id);
     s.px = 150; s.py = 250; s.vx = 0; s.vy = 0;
     s.readyTime = performance.now(); // Start ready countdown
+    s.lastFogClearTime = 0; // Reset fog timing for new segment
   }, []);
   
   const update = useCallback((t) => {
@@ -438,14 +481,39 @@ export default function SantaSleighRun() {
         
         // Check if fog is visible on screen (for gravity pause)
         let fogOnScreen = false;
+        let activeFogExists = false;
         s.seg.fogs.forEach(f => {
           if (!f.cleared) {
+            activeFogExists = true;
             const fx = f.x - s.scrollX;
             if (fx < W && fx + f.w > 0) {
               fogOnScreen = true;
             }
+            // Check if fog has passed off the left side of screen
+            if (fx + f.w < -50) {
+              f.cleared = true; // Mark as cleared
+              s.lastFogClearTime = t;
+            }
           }
         });
+        
+        // Dynamic fog spawning - only in non-final segments
+        if (!final) {
+          // Check if we should spawn a new fog:
+          // 1. No active fog currently exists
+          // 2. At least 3 seconds since game start (readyTime)
+          // 3. At least 5 seconds since last fog was cleared
+          const timeSinceStart = t - s.readyTime;
+          const timeSinceFogClear = s.lastFogClearTime > 0 ? t - s.lastFogClearTime : Infinity;
+          const noActiveFog = !activeFogExists || s.seg.fogs.every(f => f.cleared);
+          
+          if (noActiveFog && timeSinceStart > 3000 && (s.lastFogClearTime === 0 || timeSinceFogClear > 5000)) {
+            // Spawn new fog ahead of the player
+            const fogX = s.scrollX + W + 100 + Math.random() * 200;
+            const fogW = 200 + Math.random() * 150;
+            s.seg.fogs.push({ x: fogX, w: fogW, cleared: false });
+          }
+        }
         
         // Start fog pause timer when fog first appears
         if (fogOnScreen && s.fogPauseStart === 0) {
@@ -471,7 +539,7 @@ export default function SantaSleighRun() {
         s.py += s.vy * dt;
       }
       
-      if (s.keys['r'] || s.keys['R']) {
+      if ((s.keys['r'] || s.keys['R']) && !inReadyPeriod) {
         // Find closest uncleared fog ahead
         let closestFog = null;
         let closestDist = Infinity;
@@ -487,6 +555,7 @@ export default function SantaSleighRun() {
         
         if (closestFog) {
           closestFog.cleared = true;
+          s.lastFogClearTime = t; // Track when fog was cleared
           // Fire red beam
           s.beam = { startTime: t, duration: 500, targetX: closestFog.x - s.scrollX };
           // Add dissolving animation
@@ -509,6 +578,7 @@ export default function SantaSleighRun() {
           if (s.px < fx + f.w && s.px + s.pw > fx) {
             s.energy = Math.max(0, s.energy - FOG_PENALTY);
             f.cleared = true;
+            s.lastFogClearTime = t; // Track when fog was cleared
             s.msg = 'Fog! Energy -20%'; s.msgT = t + 1500;
           }
         }
@@ -524,7 +594,7 @@ export default function SantaSleighRun() {
         s.inv = t + 5000; // Extend invincibility to cover ready period
         s.msg = 'Hit ground! Restarting stage...'; s.msgT = t + 1500;
         s.zap = { startTime: t, duration: 400, x: s.px, y: H - 100 };
-        if (s.lives <= 0) s.mode = 'GAME_OVER';
+        if (s.lives <= 0) { s.mode = 'GAME_OVER'; setTick(tk => tk + 1); }
       }
       // Keep Santa above ground
       if (s.py + s.ph > H - 100) { s.py = H - 100 - s.ph; s.vy = 0; }
@@ -561,7 +631,7 @@ export default function SantaSleighRun() {
             s.msg = `Hit ${o.t}! Restarting stage...`; s.msgT = t + 1500;
             // Trigger electric zap effect
             s.zap = { startTime: t, duration: 400, x: s.px, y: s.py };
-            if (s.lives <= 0) s.mode = 'GAME_OVER';
+            if (s.lives <= 0) { s.mode = 'GAME_OVER'; setTick(tk => tk + 1); }
             break;
           }
         }
@@ -583,7 +653,7 @@ export default function SantaSleighRun() {
             s.inFinalShaft = false;
             s.msg = 'Hit tree! Restarting...'; s.msgT = t + 1500;
             s.zap = { startTime: t, duration: 400, x: s.px, y: s.py };
-            if (s.lives <= 0) s.mode = 'GAME_OVER';
+            if (s.lives <= 0) { s.mode = 'GAME_OVER'; setTick(tk => tk + 1); }
           }
           
           // Check collision with right tree
@@ -597,7 +667,7 @@ export default function SantaSleighRun() {
             s.inFinalShaft = false;
             s.msg = 'Hit tree! Restarting...'; s.msgT = t + 1500;
             s.zap = { startTime: t, duration: 400, x: s.px, y: s.py };
-            if (s.lives <= 0) s.mode = 'GAME_OVER';
+            if (s.lives <= 0) { s.mode = 'GAME_OVER'; setTick(tk => tk + 1); }
           }
         }
       }
@@ -728,7 +798,7 @@ export default function SantaSleighRun() {
       
       if (s.py > H && t > s.inv) {
         s.lives--; 
-        if (s.lives <= 0) s.mode = 'GAME_OVER';
+        if (s.lives <= 0) { s.mode = 'GAME_OVER'; setTick(tk => tk + 1); }
         else {
           // Find nearest building platform to where Santa fell
           let nearestPlat = s.cityLvl.plats[0];
@@ -878,25 +948,37 @@ export default function SantaSleighRun() {
       ctx.fillStyle = '#ffd700';
       ctx.font = 'bold 44px Georgia';
       ctx.textAlign = 'center';
-      ctx.fillText('🎅 SANTA SLEIGH RUN 🎄', W/2, 120);
+      ctx.fillText('🎅 SANTA SLEIGH RUN 🎄', W/2, 70);
       
       ctx.fillStyle = '#fff';
-      ctx.font = '16px Georgia';
-      ctx.fillText('Deliver presents: North Pole → Montreal → NYC → DC → Nashville', W/2, 165);
+      ctx.font = '14px Georgia';
+      ctx.fillText('North Pole → Montreal → NYC → DC → Nashville', W/2, 105);
       
-      ctx.fillStyle = '#fff';
-      ctx.font = '14px Arial';
-      ['↑↓←→ Steer/Move', 'SPACE Thrust/Jump', 'R Clear Fog', 'ENTER Start'].forEach((txt, i) => {
-        ctx.fillText(txt, W/2, 220 + i * 28);
-      });
+      // Condensed instructions
+      ctx.fillStyle = '#aaa';
+      ctx.font = '12px Arial';
+      ctx.fillText('↑↓←→ Move | SPACE Thrust/Jump | R Clear Fog', W/2, 135);
       
-      if (Math.floor(Date.now() / 500) % 2) {
-        ctx.fillStyle = '#ffd700';
-        ctx.font = 'bold 22px Georgia';
-        ctx.fillText('Press ENTER to Start!', W/2, 380);
+      // High Scores section
+      ctx.fillStyle = '#ffd700';
+      ctx.font = 'bold 24px Georgia';
+      ctx.fillText('🏆 HIGH SCORES 🏆', W/2, 185);
+      
+      // High score list
+      ctx.font = '16px "Courier New", monospace';
+      if (highScores.length === 0) {
+        ctx.fillStyle = '#888';
+        ctx.fillText('No high scores yet!', W/2, 225);
+      } else {
+        highScores.forEach((hs, i) => {
+          const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : '  ';
+          ctx.fillStyle = i === 0 ? '#ffd700' : i === 1 ? '#c0c0c0' : i === 2 ? '#cd7f32' : '#fff';
+          ctx.fillText(`${medal} ${i + 1}. ${hs.initials}  ${hs.score.toLocaleString().padStart(10)}`, W/2, 220 + i * 28);
+        });
       }
       
-      drawSleigh(ctx, W/2 - 50, 420, false);
+      // Draw sleigh
+      drawSleigh(ctx, W/2 - 50, 400, false);
     }
     
     if (s.mode === 'FLIGHT' && s.seg) {
@@ -921,6 +1003,177 @@ export default function SantaSleighRun() {
       // Ground
       ctx.fillStyle = final ? '#1a472a' : '#e8f4f8';
       ctx.fillRect(0, H - 100, W, 100);
+      
+      // North Pole scene at game start (first segment only)
+      if (s.segIdx === 0 && s.scrollX < 600) {
+        const npX = 80 - s.scrollX; // Position of North Pole building
+        const groundY = H - 100;
+        
+        if (npX > -200 && npX < W + 100) {
+          // Snow-covered ground around chalet
+          ctx.fillStyle = '#ffffff';
+          ctx.beginPath();
+          ctx.ellipse(npX + 100, groundY, 180, 20, 0, 0, Math.PI * 2);
+          ctx.fill();
+          
+          // German-style Chalet base
+          ctx.fillStyle = '#8B4513'; // Brown wood
+          ctx.fillRect(npX + 20, groundY - 120, 160, 120);
+          
+          // White trim/half-timber pattern
+          ctx.strokeStyle = '#fff';
+          ctx.lineWidth = 4;
+          // Vertical beams
+          ctx.beginPath();
+          ctx.moveTo(npX + 20, groundY - 120);
+          ctx.lineTo(npX + 20, groundY);
+          ctx.moveTo(npX + 100, groundY - 120);
+          ctx.lineTo(npX + 100, groundY);
+          ctx.moveTo(npX + 180, groundY - 120);
+          ctx.lineTo(npX + 180, groundY);
+          // Horizontal beam
+          ctx.moveTo(npX + 20, groundY - 60);
+          ctx.lineTo(npX + 180, groundY - 60);
+          // Cross beams
+          ctx.moveTo(npX + 20, groundY - 120);
+          ctx.lineTo(npX + 100, groundY - 60);
+          ctx.moveTo(npX + 100, groundY - 60);
+          ctx.lineTo(npX + 180, groundY - 120);
+          ctx.stroke();
+          
+          // Steep A-frame roof
+          ctx.fillStyle = '#cc0000'; // Red roof
+          ctx.beginPath();
+          ctx.moveTo(npX, groundY - 115);
+          ctx.lineTo(npX + 100, groundY - 200);
+          ctx.lineTo(npX + 200, groundY - 115);
+          ctx.closePath();
+          ctx.fill();
+          
+          // Snow on roof
+          ctx.fillStyle = '#fff';
+          ctx.beginPath();
+          ctx.moveTo(npX + 5, groundY - 118);
+          ctx.lineTo(npX + 100, groundY - 195);
+          ctx.lineTo(npX + 195, groundY - 118);
+          ctx.lineTo(npX + 185, groundY - 118);
+          ctx.lineTo(npX + 100, groundY - 185);
+          ctx.lineTo(npX + 15, groundY - 118);
+          ctx.closePath();
+          ctx.fill();
+          
+          // Snow drips on roof edge
+          for (let i = 0; i < 8; i++) {
+            const drip = Math.sin(t / 300 + i) * 3;
+            ctx.beginPath();
+            ctx.arc(npX + 20 + i * 22, groundY - 115 + drip, 6, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          
+          // Door
+          ctx.fillStyle = '#2a1810';
+          ctx.fillRect(npX + 75, groundY - 55, 50, 55);
+          // Door frame
+          ctx.strokeStyle = '#ffd700';
+          ctx.lineWidth = 3;
+          ctx.strokeRect(npX + 75, groundY - 55, 50, 55);
+          // Door wreath
+          ctx.strokeStyle = '#228B22';
+          ctx.lineWidth = 6;
+          ctx.beginPath();
+          ctx.arc(npX + 100, groundY - 35, 12, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.fillStyle = '#ff0000';
+          ctx.beginPath();
+          ctx.arc(npX + 100, groundY - 23, 4, 0, Math.PI * 2);
+          ctx.fill();
+          
+          // Windows with warm glow
+          ctx.fillStyle = '#ffeaa7';
+          ctx.fillRect(npX + 35, groundY - 100, 25, 25);
+          ctx.fillRect(npX + 140, groundY - 100, 25, 25);
+          // Window frames
+          ctx.strokeStyle = '#fff';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(npX + 35, groundY - 100, 25, 25);
+          ctx.strokeRect(npX + 140, groundY - 100, 25, 25);
+          // Window cross
+          ctx.beginPath();
+          ctx.moveTo(npX + 47.5, groundY - 100);
+          ctx.lineTo(npX + 47.5, groundY - 75);
+          ctx.moveTo(npX + 35, groundY - 87.5);
+          ctx.lineTo(npX + 60, groundY - 87.5);
+          ctx.moveTo(npX + 152.5, groundY - 100);
+          ctx.lineTo(npX + 152.5, groundY - 75);
+          ctx.moveTo(npX + 140, groundY - 87.5);
+          ctx.lineTo(npX + 165, groundY - 87.5);
+          ctx.stroke();
+          
+          // Large candy canes on either side
+          const drawCandyCane = (cx, cy, scale) => {
+            ctx.strokeStyle = '#ff0000';
+            ctx.lineWidth = 12 * scale;
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            ctx.moveTo(cx, cy);
+            ctx.lineTo(cx, cy - 60 * scale);
+            ctx.arc(cx + 20 * scale, cy - 60 * scale, 20 * scale, Math.PI, 0, true);
+            ctx.stroke();
+            // White stripes
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 6 * scale;
+            ctx.beginPath();
+            for (let i = 0; i < 4; i++) {
+              ctx.moveTo(cx, cy - i * 20 * scale);
+              ctx.lineTo(cx, cy - 8 * scale - i * 20 * scale);
+            }
+            ctx.stroke();
+          };
+          drawCandyCane(npX - 15, groundY - 10, 1.2);
+          drawCandyCane(npX + 215, groundY - 10, 1.2);
+          
+          // Animated snowflakes around chalet
+          ctx.fillStyle = '#fff';
+          for (let i = 0; i < 12; i++) {
+            const sfx = npX + 20 + (i * 47 + t / 20) % 200;
+            const sfy = groundY - 220 + Math.sin(t / 300 + i * 0.8) * 30 + (i * 31 + t / 30) % 120;
+            ctx.font = `${12 + (i % 3) * 4}px Arial`;
+            ctx.fillText('❄', sfx, sfy);
+          }
+          
+          // Wooden sign post
+          ctx.fillStyle = '#5c3317';
+          ctx.fillRect(npX + 230, groundY - 80, 8, 80);
+          // Sign board
+          ctx.fillStyle = '#8B4513';
+          ctx.fillRect(npX + 210, groundY - 90, 60, 35);
+          // Snow on sign
+          ctx.fillStyle = '#fff';
+          ctx.beginPath();
+          ctx.ellipse(npX + 240, groundY - 90, 35, 8, 0, 0, Math.PI * 2);
+          ctx.fill();
+          // Sign text
+          ctx.fillStyle = '#fff';
+          ctx.font = 'bold 11px Georgia';
+          ctx.textAlign = 'center';
+          ctx.fillText('NORTH', npX + 240, groundY - 73);
+          ctx.fillText('POLE', npX + 240, groundY - 60);
+          
+          // Chimney with smoke
+          ctx.fillStyle = '#654321';
+          ctx.fillRect(npX + 130, groundY - 185, 25, 40);
+          // Smoke puffs
+          ctx.fillStyle = 'rgba(200, 200, 200, 0.6)';
+          for (let i = 0; i < 4; i++) {
+            const smokeY = groundY - 190 - i * 20 - (t / 50) % 30;
+            const smokeX = npX + 142 + Math.sin(t / 200 + i) * 8;
+            const smokeSize = 8 + i * 4;
+            ctx.beginPath();
+            ctx.arc(smokeX, smokeY, smokeSize, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+      }
       
       // Obstacles
       for (const o of s.seg.obs) {
@@ -1766,11 +2019,11 @@ export default function SantaSleighRun() {
       ctx.fillStyle = '#0a1628';
       ctx.fillRect(0, 0, W, H);
       
-      // Draw celebration image filling the screen
+      // Draw celebration image scaled to fit (not fill) the screen
       if (winImageLoaded && winImageRef.current) {
         const img = winImageRef.current;
-        // Scale image to fill canvas while maintaining aspect ratio
-        const scale = Math.max(W / img.naturalWidth, H / img.naturalHeight);
+        // Scale image to fit canvas while maintaining aspect ratio (show full image)
+        const scale = Math.min(W / img.naturalWidth, H / img.naturalHeight) * 0.92;
         const imgW = img.naturalWidth * scale;
         const imgH = img.naturalHeight * scale;
         const imgX = (W - imgW) / 2;
@@ -1813,23 +2066,12 @@ export default function SantaSleighRun() {
       
       // Final Score at bottom
       ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-      ctx.fillRect(0, H - 80, W, 80);
+      ctx.fillRect(0, H - 50, W, 50);
       
       ctx.fillStyle = '#ffd700';
       ctx.font = 'bold 24px Arial';
       ctx.textAlign = 'center';
-      ctx.fillText(`FINAL SCORE: ${s.score.toLocaleString()}`, W/2, H - 50);
-      
-      // Flashing play again
-      if (Math.floor(t / 400) % 2) {
-        ctx.save();
-        ctx.shadowColor = '#00ff00';
-        ctx.shadowBlur = 15;
-        ctx.fillStyle = '#00ff00';
-        ctx.font = 'bold 20px Georgia';
-        ctx.fillText('Press ENTER to Play Again!', W/2, H - 20);
-        ctx.restore();
-      }
+      ctx.fillText(`FINAL SCORE: ${s.score.toLocaleString()}`, W/2, H - 18);
     }
     
     if (s.mode === 'GAME_OVER') {
@@ -1839,21 +2081,111 @@ export default function SantaSleighRun() {
       ctx.fillStyle = '#cc0000';
       ctx.font = 'bold 52px Georgia';
       ctx.textAlign = 'center';
-      ctx.fillText('GAME OVER', W/2, 200);
+      ctx.fillText('GAME OVER', W/2, 180);
       
       ctx.fillStyle = '#fff';
       ctx.font = '70px Arial';
-      ctx.fillText('😢', W/2, 310);
+      ctx.fillText('😢', W/2, 280);
       
       ctx.font = '22px Georgia';
-      ctx.fillText('Santa ran out of lives!', W/2, 390);
-      ctx.fillText('The children are waiting...', W/2, 430);
+      ctx.fillText('Santa ran out of lives!', W/2, 360);
+      ctx.fillText('The children are waiting...', W/2, 400);
       
-      if (Math.floor(Date.now() / 500) % 2) {
-        ctx.fillStyle = '#ffd700';
-        ctx.font = 'bold 22px Georgia';
-        ctx.fillText('Press ENTER to Try Again!', W/2, 510);
+      // Show score
+      ctx.fillStyle = '#ffd700';
+      ctx.font = 'bold 28px Arial';
+      ctx.fillText(`SCORE: ${s.score.toLocaleString()}`, W/2, 470);
+      
+      // High score indicator
+      if (isHighScore(s.score)) {
+        ctx.fillStyle = '#00ff00';
+        ctx.font = 'bold 18px Georgia';
+        ctx.fillText('🏆 New High Score! 🏆', W/2, 510);
       }
+    }
+    
+    // High Score Entry Screen
+    if (s.mode === 'HIGH_SCORE_ENTRY') {
+      // Dark festive background
+      const grad = ctx.createLinearGradient(0, 0, 0, H);
+      grad.addColorStop(0, '#1a0a2e');
+      grad.addColorStop(0.5, '#16213e');
+      grad.addColorStop(1, '#0f3460');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, W, H);
+      
+      // Stars
+      ctx.fillStyle = '#fff';
+      for (let i = 0; i < 80; i++) {
+        const twinkle = Math.sin(t / 300 + i * 0.5) * 0.5 + 0.5;
+        ctx.globalAlpha = 0.3 + twinkle * 0.7;
+        ctx.beginPath();
+        ctx.arc((i * 137) % W, (i * 89) % H, ((i * 13) % 3) + 1, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      
+      // Title
+      ctx.save();
+      ctx.shadowColor = '#ffd700';
+      ctx.shadowBlur = 20;
+      ctx.fillStyle = '#ffd700';
+      ctx.font = 'bold 48px Georgia';
+      ctx.textAlign = 'center';
+      ctx.fillText('🏆 NEW HIGH SCORE! 🏆', W/2, 100);
+      ctx.restore();
+      
+      // Score display
+      ctx.fillStyle = '#00ff00';
+      ctx.font = 'bold 36px Arial';
+      ctx.fillText(pendingScore.toLocaleString(), W/2, 160);
+      
+      // Instructions
+      ctx.fillStyle = '#fff';
+      ctx.font = '20px Georgia';
+      ctx.fillText('Enter your initials:', W/2, 230);
+      
+      // Initial entry boxes
+      const boxSize = 70;
+      const spacing = 20;
+      const startX = W/2 - (boxSize * 3 + spacing * 2) / 2;
+      
+      for (let i = 0; i < 3; i++) {
+        const x = startX + i * (boxSize + spacing);
+        const y = 260;
+        
+        // Box background
+        ctx.fillStyle = i === hsPosition ? '#2a4a6a' : '#1a2a4a';
+        ctx.fillRect(x, y, boxSize, boxSize);
+        
+        // Box border
+        ctx.strokeStyle = i === hsPosition ? '#ffd700' : '#4a6a8a';
+        ctx.lineWidth = i === hsPosition ? 4 : 2;
+        ctx.strokeRect(x, y, boxSize, boxSize);
+        
+        // Letter
+        ctx.fillStyle = i === hsPosition ? '#ffd700' : '#fff';
+        ctx.font = 'bold 48px "Courier New", monospace';
+        ctx.fillText(hsInitials[i], x + boxSize/2, y + boxSize/2 + 16);
+      }
+      
+      // Cursor indicator
+      if (Math.floor(t / 300) % 2) {
+        const cursorX = startX + hsPosition * (boxSize + spacing) + boxSize/2;
+        ctx.fillStyle = '#ffd700';
+        ctx.fillRect(cursorX - 20, 340, 40, 4);
+      }
+      
+      // Controls help
+      ctx.fillStyle = '#aaa';
+      ctx.font = '16px Arial';
+      ctx.fillText('↑↓ Change Letter | ←→ Move | ENTER Submit', W/2, 400);
+      
+      // Decorative elements
+      ctx.font = '40px Arial';
+      ctx.fillText('🎄', 80, H - 80);
+      ctx.fillText('🎁', W - 80, H - 80);
+      ctx.fillText('⭐', W/2, H - 60);
     }
     
     // Snow
@@ -1981,7 +2313,7 @@ export default function SantaSleighRun() {
         ctx.fillText("🎅 Let's go! 🦌", W/2, btnY + btnH/2 + 6);
       }
     }
-  }, [introImageLoaded, dcImageLoaded, dcCountdown, winImageLoaded]);
+  }, [introImageLoaded, dcImageLoaded, dcCountdown, winImageLoaded, highScores, hsInitials, hsPosition, pendingScore]);
   
   // Draw iconic city monuments
   function drawMonument(ctx, type, x, groundY) {
@@ -2872,6 +3204,46 @@ export default function SantaSleighRun() {
       }
       state.current.keys[e.key] = down;
       
+      // High Score Entry controls
+      if (down && state.current.mode === 'HIGH_SCORE_ENTRY') {
+        if (e.key === 'ArrowUp') {
+          setHsInitials(prev => {
+            const newInitials = [...prev];
+            const code = newInitials[hsPosition].charCodeAt(0);
+            newInitials[hsPosition] = String.fromCharCode(code >= 90 ? 65 : code + 1);
+            return newInitials;
+          });
+        } else if (e.key === 'ArrowDown') {
+          setHsInitials(prev => {
+            const newInitials = [...prev];
+            const code = newInitials[hsPosition].charCodeAt(0);
+            newInitials[hsPosition] = String.fromCharCode(code <= 65 ? 90 : code - 1);
+            return newInitials;
+          });
+        } else if (e.key === 'ArrowLeft') {
+          setHsPosition(prev => Math.max(0, prev - 1));
+        } else if (e.key === 'ArrowRight') {
+          setHsPosition(prev => Math.min(2, prev + 1));
+        } else if (e.key === 'Enter') {
+          // Submit high score
+          addHighScore(hsInitials.join(''), pendingScore);
+          // Reset for next time
+          setHsInitials(['A', 'A', 'A']);
+          setHsPosition(0);
+          // Reset game state and go to title
+          const s = state.current;
+          Object.assign(s, {
+            mode: 'TITLE', lives: LIVES, energy: MAX_ENERGY, segIdx: 0,
+            px: 150, py: 250, vx: 0, vy: 0, ground: false,
+            scrollX: 0, seg: null, cityLvl: null, delivered: 0, doneCh: [], canExit: false,
+            inv: 0, msg: '', msgT: 0, beam: null, dissolvingFogs: [], fogPauseStart: 0, lastFogClearTime: 0, zap: null, wind: null, windWarning: null, lastWindTime: 0, lastRespawnTime: 0, airJumpsUsed: 0, readyTime: 0,
+            score: 0, goodies: [], lastGoodyTime: 0, inFinalShaft: false
+          });
+          setTick(t => t + 1);
+        }
+        return;
+      }
+      
       // Pause/Resume with P or Escape
       if (down && (e.key === 'p' || e.key === 'P' || e.key === 'Escape')) {
         const s = state.current;
@@ -2893,6 +3265,7 @@ export default function SantaSleighRun() {
           s.lastGoodyTime = 0;
           s.inFinalShaft = false;
           s.lastFrameTime = 0;
+          s.lastFogClearTime = 0;
           // Initialize segment directly
           s.scrollX = 0;
           s.seg = genFlight(SEGMENTS[0].id);
@@ -2902,12 +3275,12 @@ export default function SantaSleighRun() {
         } else if (s.mode === 'TITLE') {
           s.mode = 'INTRO';
           setTick(t => t + 1);
-        } else if (s.mode === 'WIN' || s.mode === 'GAME_OVER') {
+        } else if (s.mode === 'GAME_OVER') {
           Object.assign(s, {
             mode: 'TITLE', lives: LIVES, energy: MAX_ENERGY, segIdx: 0,
             px: 150, py: 250, vx: 0, vy: 0, ground: false,
             scrollX: 0, seg: null, cityLvl: null, delivered: 0, doneCh: [], canExit: false,
-            inv: 0, msg: '', msgT: 0, beam: null, dissolvingFogs: [], fogPauseStart: 0, zap: null, wind: null, windWarning: null, lastWindTime: 0, lastRespawnTime: 0, airJumpsUsed: 0, readyTime: 0,
+            inv: 0, msg: '', msgT: 0, beam: null, dissolvingFogs: [], fogPauseStart: 0, lastFogClearTime: 0, zap: null, wind: null, windWarning: null, lastWindTime: 0, lastRespawnTime: 0, airJumpsUsed: 0, readyTime: 0,
             score: 0, goodies: [], lastGoodyTime: 0, inFinalShaft: false
           });
         }
@@ -3029,6 +3402,7 @@ export default function SantaSleighRun() {
                   s.seg = genFlight(SEGMENTS[s.segIdx].id);
                   s.px = 150; s.py = 250; s.vx = 0; s.vy = 0;
                   s.readyTime = performance.now();
+                  s.lastFogClearTime = 0;
                   setDcCountdown(0);
                   setTick(t => t + 1);
                 }
@@ -3061,6 +3435,7 @@ export default function SantaSleighRun() {
                   s.seg = genFlight(SEGMENTS[s.segIdx].id);
                   s.px = 150; s.py = 250; s.vx = 0; s.vy = 0;
                   s.readyTime = performance.now();
+                  s.lastFogClearTime = 0;
                   setDcCountdown(0);
                   setTick(t => t + 1);
                 }
@@ -3094,6 +3469,7 @@ export default function SantaSleighRun() {
             s.lastGoodyTime = 0;
             s.inFinalShaft = false;
             s.lastFrameTime = 0;
+            s.lastFogClearTime = 0;
             // Initialize segment directly
             s.scrollX = 0;
             s.seg = genFlight(SEGMENTS[0].id);
@@ -3115,6 +3491,7 @@ export default function SantaSleighRun() {
             s.lastGoodyTime = 0;
             s.inFinalShaft = false;
             s.lastFrameTime = 0;
+            s.lastFogClearTime = 0;
             s.scrollX = 0;
             s.seg = genFlight(SEGMENTS[0].id);
             s.px = 150; s.py = 250; s.vx = 0; s.vy = 0;
@@ -3146,20 +3523,20 @@ export default function SantaSleighRun() {
         🎅 Let's go! 🦌
       </button>
       
-      {/* Mobile START button */}
-      {mobile && state.current.mode === 'TITLE' && (
+      {/* START button - show for all devices on TITLE screen */}
+      {state.current.mode === 'TITLE' && (
         <button
           onClick={() => {
             const s = state.current;
             if (s.mode === 'TITLE') {
               s.mode = 'INTRO';
-              setTick(t => t + 1); // Force re-render
+              setTick(t => t + 1);
             }
           }}
           style={{
             marginTop: 15,
-            padding: '15px 40px',
-            fontSize: 18,
+            padding: mobile ? '15px 40px' : '18px 50px',
+            fontSize: mobile ? 18 : 22,
             fontFamily: '"Press Start 2P", "Courier New", monospace',
             background: 'linear-gradient(180deg, #00ff00, #008800)',
             color: '#fff',
@@ -3175,35 +3552,91 @@ export default function SantaSleighRun() {
         </button>
       )}
       
-      {/* Mobile PLAY AGAIN button */}
-      {mobile && (state.current.mode === 'WIN' || state.current.mode === 'GAME_OVER') && (
+      {/* WIN screen Play Again button - show for all devices */}
+      {state.current.mode === 'WIN' && (
         <button
           onClick={() => {
             const s = state.current;
-            Object.assign(s, {
-              mode: 'TITLE', lives: LIVES, energy: MAX_ENERGY, segIdx: 0,
-              px: 150, py: 250, vx: 0, vy: 0, ground: false,
-              scrollX: 0, seg: null, cityLvl: null, delivered: 0, doneCh: [], canExit: false,
-              inv: 0, msg: '', msgT: 0, beam: null, dissolvingFogs: [], fogPauseStart: 0, zap: null, wind: null, windWarning: null, lastWindTime: 0, lastRespawnTime: 0, airJumpsUsed: 0, readyTime: 0,
-              score: 0, goodies: [], lastGoodyTime: 0, inFinalShaft: false
-            });
-            setTick(t => t + 1); // Force re-render
+            const finalScore = s.score;
+            if (isHighScore(finalScore)) {
+              // Go to high score entry
+              setPendingScore(finalScore);
+              setHsInitials(['A', 'A', 'A']);
+              setHsPosition(0);
+              s.mode = 'HIGH_SCORE_ENTRY';
+              s.finalScore = finalScore;
+            } else {
+              // Just go to title
+              Object.assign(s, {
+                mode: 'TITLE', lives: LIVES, energy: MAX_ENERGY, segIdx: 0,
+                px: 150, py: 250, vx: 0, vy: 0, ground: false,
+                scrollX: 0, seg: null, cityLvl: null, delivered: 0, doneCh: [], canExit: false,
+                inv: 0, msg: '', msgT: 0, beam: null, dissolvingFogs: [], fogPauseStart: 0, lastFogClearTime: 0, zap: null, wind: null, windWarning: null, lastWindTime: 0, lastRespawnTime: 0, airJumpsUsed: 0, readyTime: 0,
+                score: 0, goodies: [], lastGoodyTime: 0, inFinalShaft: false
+              });
+            }
+            setTick(t => t + 1);
           }}
           style={{
-            marginTop: 15,
-            padding: '15px 30px',
-            fontSize: 14,
+            marginTop: 20,
+            padding: mobile ? '15px 30px' : '18px 50px',
+            fontSize: mobile ? 16 : 20,
+            fontFamily: '"Press Start 2P", "Courier New", monospace',
+            background: 'linear-gradient(180deg, #00cc00, #008800)',
+            color: '#fff',
+            border: '4px solid #ffd700',
+            borderRadius: 12,
+            cursor: 'pointer',
+            boxShadow: '0 0 25px #00cc00, 0 0 50px rgba(0,204,0,0.5)',
+            textShadow: '2px 2px 0 #000',
+            animation: 'pulse 1s infinite'
+          }}
+        >
+          🎄 Continue 🎄
+        </button>
+      )}
+      
+      {/* GAME OVER Continue button - show for all devices */}
+      {state.current.mode === 'GAME_OVER' && (
+        <button
+          onClick={() => {
+            const s = state.current;
+            const finalScore = s.score;
+            if (isHighScore(finalScore)) {
+              // Go to high score entry
+              setPendingScore(finalScore);
+              setHsInitials(['A', 'A', 'A']);
+              setHsPosition(0);
+              s.mode = 'HIGH_SCORE_ENTRY';
+              s.finalScore = finalScore;
+            } else {
+              // Just go to title
+              Object.assign(s, {
+                mode: 'TITLE', lives: LIVES, energy: MAX_ENERGY, segIdx: 0,
+                px: 150, py: 250, vx: 0, vy: 0, ground: false,
+                scrollX: 0, seg: null, cityLvl: null, delivered: 0, doneCh: [], canExit: false,
+                inv: 0, msg: '', msgT: 0, beam: null, dissolvingFogs: [], fogPauseStart: 0, lastFogClearTime: 0, zap: null, wind: null, windWarning: null, lastWindTime: 0, lastRespawnTime: 0, airJumpsUsed: 0, readyTime: 0,
+                score: 0, goodies: [], lastGoodyTime: 0, inFinalShaft: false
+              });
+            }
+            setTick(t => t + 1);
+          }}
+          style={{
+            marginTop: 20,
+            padding: mobile ? '15px 30px' : '18px 50px',
+            fontSize: mobile ? 16 : 20,
             fontFamily: '"Press Start 2P", "Courier New", monospace',
             background: 'linear-gradient(180deg, #ffd700, #cc9900)',
             color: '#000',
             border: '4px solid #fff',
-            borderRadius: 10,
+            borderRadius: 12,
             cursor: 'pointer',
-            boxShadow: '0 0 20px #ffd700',
-            textShadow: '1px 1px 0 #fff'
+            boxShadow: '0 0 25px #ffd700, 0 0 50px rgba(255,215,0,0.5)',
+            textShadow: '1px 1px 0 #fff',
+            animation: 'pulse 1s infinite'
           }}
         >
-          🔄 PLAY AGAIN
+          🔄 Try Again
         </button>
       )}
       
